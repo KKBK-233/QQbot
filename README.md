@@ -1,41 +1,73 @@
 # QQbot：MaiBot 衍生引擎与工作流
 
-基于 MaiBot 的 QQ AI 项目公开源码快照，用于代码审阅和与网页版 ChatGPT 同步设计。
+QQ / SnowLuma 提供平台接入，MaiBot 提供消息、存储、模型、记忆和插件基础设施。指定群使用 KKBK 轻层与任务层；后续独立 DeepSeek Harness 负责开发和更新整个项目。
 
-2026-10-19：离线 Python 已下架，其他额外功能待精简选择。见[功能清单](docs/kkbk-engine/feature-inventory.md)。
-
-## 从这里开始
-
-- [完整实现计划与进度](docs/kkbk-engine/harness-plan.md)
-- [当前引擎接入说明](docs/kkbk-engine/README.md)
-- [工作流格式、启用与版本更新](MaiBot/docs/kkbk-workflows.md)
-- [日常层与任务层运行代码](MaiBot/src/kkbk_engine/runtime.py)
-- [工作流加载器](MaiBot/src/kkbk_engine/workflows.py)
-- [启用清单](MaiBot/workflows/enabled.json)
-- [搜索工作流示例](MaiBot/workflows/catalog/conservative-web-research/1.0.0.json)
+公开快照的来源版本见 [SOURCE_SNAPSHOT.json](SOURCE_SNAPSHOT.json)，许可证见 [LICENSE](LICENSE)。
 
 ## 当前进度
 
-日常和简单任务层复用 MaiBot 的消息、模型、记忆和插件设施。指定群的新引擎已经接入；版本化工作流源码已完成，80 项本地测试通过，其中真实 14 天回放的数据不公开。本次工作流改动尚未部署到线上。
+- 轻层与任务层已接入三个指定群，保留 3 秒防抖、80 条历史和原生工具调用。
+- 生图、搜索、按需识图三个业务插件保留；现有长期记忆保持原状。
+- 版本化工作流已实现并测试，尚未部署；开发代理、教学自动更新与发布器尚未实现。
+- 离线 Python 沙箱已下架，其源码及专用安装/部署/测试代码已删除。历史实现可从 Git 恢复。
+- 其他精简候选仅盘点，没有批量关闭。
 
-后续依次建设独立开发工具服务、教学任务协调、验证发布与恢复、主动改进。开发层最终允许修改完整项目工作副本，不局限于插件。现有记忆模块保留。
+## 项目入口
 
-## 快照范围
+- [完整实现计划与验收记录](docs/kkbk-engine/harness-plan.md)
+- [当前功能与精简候选](docs/kkbk-engine/feature-inventory.md)
+- [引擎接入说明](docs/kkbk-engine/README.md)
+- [脚本目录与使用范围](scripts/README.md)
+- [本轮目录整理说明](docs/kkbk-engine/repository-layout.md)（历史个案仅保留本地）
+- [公开源码仓库](https://github.com/KKBK-233/QQbot)
 
-来源版本及范围见 [SOURCE_SNAPSHOT.json](SOURCE_SNAPSHOT.json)。`MaiBot/` 是该提交的完整源码导出；仓库根目录提供已提交的本地集成代码和相关说明。
+## 目录
 
-本快照不包含运行配置、凭据、聊天导出、数据库、日志或未提交修改。它不是生产目录的逐字镜像；部分历史集成依赖本地未提交补丁或插件，因此不能承诺直接克隆即复现完整线上部署。部署脚本仍含本地路径约定，使用前需配置环境。
+| 目录或入口 | 用途 |
+| --- | --- |
+| `MaiBot/` | 独立 Git 仓的本地源码，含 `src/kkbk_engine`、工作流与测试 |
+| `image-tool/` | 生图桥接及生图插件源码 |
+| `chatgpt-plan/`、`opencode-go/` | 当前模型/订阅接入与验证工具 |
+| `scripts/deploy/` | 部署入口及仍被部署流程调用的兼容辅助代码 |
+| `scripts/checks/` | 管理鉴权、运行注册、请求兼容与诊断入口 |
+| `tests/` | 根项目的离线单元测试 |
+| `memory-fix/`、`gif-fix/`、`context-cache/` | 仍需保留的记忆、媒体与缓存补丁工具 |
+| `docs/` | 计划、功能清单和历史说明 |
+| 根目录启动脚本、模型桥接 | 已被 WSL/Supervisor 引用，固定路径保留 |
 
-## 工作流测试
+本地源码、运行实例和公开快照是不同位置。公开仓库包含已提交源码的导出副本；运行配置、聊天记录、登录信息和未提交修改不上传。
+
+## 日常操作
+
+在 Windows 项目根目录执行：
+
+```powershell
+.\启动机器人.ps1
+.\查看管理登录.ps1
+wsl -d Ubuntu -u qqbot -- python3 /mnt/d/code/web/QQbot/scripts/checks/check-wsl.py
+```
+
+管理页面：MaiBot `http://localhost:8001`，SnowLuma `http://localhost:5099`。
+
+QQ 使用现有登录目录，启动后先检查恢复状态；只有客户端要求验证时才重新登录。只修改模型或机器人源码时，按需要重启 `maibot`，不重启 QQ/SnowLuma。
+
+## 离线验证
+
+根项目：
+
+```powershell
+python -X utf8 -B -m unittest discover -s tests -p "test_*.py"
+```
+
+引擎与工作流：
 
 ```powershell
 cd MaiBot
-python -m pip install pytest
 python -X utf8 -B -m pytest -q --noconftest -p no:cacheprovider pytests/kkbk_engine
 ```
 
-未提供私有回放数据时，对应回放项会跳过；纯工作流与运行时模拟测试不需要 QQ 登录或模型密钥。
+真实群聊回放需要本地私有数据，通过 `KKBK_REPLAY_EXPORT` 指定；公开快照缺少该数据时跳过对应项。微信人工交付测试依赖本地搜索插件源码，公开快照缺少该源码时跳过对应测试。检查脚本的 `--live`、浏览器交付和部署入口需按其说明单独使用，不由单元测试自动触发。
 
-## 来源与许可证
+## 来源
 
-MaiBot 上游：[Mai-with-u/MaiBot](https://github.com/Mai-with-u/MaiBot)，基线 `bac9090758668098003d59642b607fb0f1b77337`。保留上游源码、版权和各组件许可证；整体衍生代码按 [GPL-3.0](LICENSE) 提供，具体组件同时见其目录内许可证。
+MaiBot 上游：[Mai-with-u/MaiBot](https://github.com/Mai-with-u/MaiBot)，当前衍生引擎基线 `bac9090`。组件许可证及来源信息见各自目录；公开源码快照另附 `SOURCE_SNAPSHOT.json`。

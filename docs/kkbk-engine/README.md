@@ -1,5 +1,7 @@
 # 新引擎运行接入
 
+2026-10-19：脚本已分类到 `scripts/deploy/` 和 `scripts/checks/`。下文四插件及首次切换记录保留为历史验收；当前 Python 沙箱已下架并删除源码，运行功能以 feature-inventory.md 为准。
+
 正式群：1022382380、894179464、427204073。通过 HeartflowManager 直接创建
 KKBKHeartFlowChatting，其余会话仍沿用原运行时。没有启用影子模式。
 
@@ -18,14 +20,14 @@ KKBKHeartFlowChatting，其余会话仍沿用原运行时。没有启用影子�
 - 引擎源码在 MaiBot/src/kkbk_engine，核心仓分支 codex/kkbk-engine-integration。
 - 生图钩子源码在 image-tool/maibot-plugin/plugin.py。
 - 任务识图插件已有其他未提交改动，因此只将本次增量保存为 task-assist.patch；没有把该插件之前的修改混入提交。
-- deploy-kkbk-engine.py 先对照运行快照检查四个已有文件，再逐文件暂存、部署并核对字节。
+- `scripts/deploy/deploy-kkbk-engine.py` 先对照运行快照检查四个已有文件，再逐文件暂存、部署并核对字节。
 - 部署清单和原文件保存在 data/kkbk-cutover；不复制配置、凭据、聊天或媒体。
 - 只重启 maibot。QQ pid 87、SnowLuma pid 222 在本次部署前后保持不变。
 
 ## 验证记录
 
 - 门控、动作、转发和真实14天回放：41项通过。
-- verify-kkbk-engine.py 在生产虚拟环境中模拟发送，覆盖单次轻回复、失败补试、工具成功后回答失败不重复执行、真实身份绑定和记忆工具目录。
+- `scripts/checks/verify-kkbk-engine.py` 在生产虚拟环境中模拟发送，覆盖单次轻回复、失败补试、工具成功后回答失败不重复执行、真实身份绑定和记忆工具目录。
 - --live 使用现有 DeepSeek 验证 JSON、原生工具调用与结果回填；测试工具为本地模拟，不发送QQ消息。
 - 新进程启动完成，四个扩展插件加载成功、失败0。完整群聊效果由用户继续测试。
 

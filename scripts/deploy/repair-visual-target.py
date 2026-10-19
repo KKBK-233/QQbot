@@ -101,7 +101,7 @@ def apply(folder):
     source = folder / 'task_flow.py'
     before = source.read_text(encoding='utf-8-sig')
     after = patched(before)
-    helper = Path(__file__).parent / 'image-tool/visual_target.py'
+    helper = Path(__file__).resolve().parents[2] / 'image-tool/visual_target.py'
     helper_bytes = helper.read_bytes()
     compile(helper_bytes, helper.name, 'exec')
     target = folder / helper.name

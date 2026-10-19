@@ -5,7 +5,7 @@ import importlib.util
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('direct_bridge', Path(__file__).with_name('deepseek-windows-direct.py'))
+spec = importlib.util.spec_from_file_location('direct_bridge', Path(__file__).resolve().parents[1] / 'deepseek-windows-direct.py')
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 

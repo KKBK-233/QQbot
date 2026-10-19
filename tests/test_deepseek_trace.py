@@ -8,7 +8,7 @@ import unittest
 import httpx
 from openai import AsyncOpenAI
 
-spec = importlib.util.spec_from_file_location('deepseek_trace', Path(__file__).with_name('deepseek-transport-trace.py'))
+spec = importlib.util.spec_from_file_location('deepseek_trace', Path(__file__).resolve().parents[1] / 'deepseek-transport-trace.py')
 trace = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trace)
 

@@ -9,7 +9,7 @@ import uuid
 import urllib.error
 import urllib.request
 
-sys.path.insert(0, str(Path(__file__).parent / 'image-tool'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'image-tool'))
 from bridge import backend_environment
 
 

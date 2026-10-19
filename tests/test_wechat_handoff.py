@@ -7,11 +7,16 @@ import importlib.util
 import json
 import unittest
 
-spec = importlib.util.spec_from_file_location('handoff', Path(__file__).with_name('verify-wechat-article.py'))
-handoff = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(handoff)
+# 公开快照没有本地搜索插件源码；缺少依赖时跳过，不执行不完整的入口。
+root = Path(__file__).resolve().parents[1]
+handoff = None
+if (root / 'MaiBot/plugins/qqbot-web-search/manual_article.py').is_file():
+    spec = importlib.util.spec_from_file_location('handoff', root / 'verify-wechat-article.py')
+    handoff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(handoff)
 
 
+@unittest.skipUnless(handoff is not None, '需要本地搜索插件源码，公开快照未包含')
 class HandoffTests(unittest.TestCase):
     def test_only_original_article_is_delivered(self):
         url = 'https://mp.weixin.qq.com/s/public'
