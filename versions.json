@@ -1,0 +1,42 @@
+{
+  "maibot": {
+    "version": "1.3.1",
+    "repository": "https://github.com/Mai-with-u/MaiBot",
+    "commit": "bac9090758668098003d59642b607fb0f1b77337"
+  },
+  "adapter": {
+    "config_version": "2.5.0",
+    "client_type": "snowluma",
+    "version": "1.1.0",
+    "commit": "183212a94aef03a43c4ae4e32bb06f9194b26ed1"
+  },
+  "snowluma": {
+    "platform": "linux-x64",
+    "sha256": "3e358c46e5f3d4eae4ae49b8f6277f65bcb4f33d0391059e034d0a1242b807b2",
+    "version": "v1.14.20"
+  },
+  "qq": {
+    "platform": "amd64",
+    "sha256": "d085dd89397225061eb9f194308f688129818ed445777e97a4a0a16e13d7b0e8",
+    "version": "3.2.32_260812",
+    "source": "https://qqdl.gtimg.cn/qqfile/QQNT/9.9.33/release/3f89efc5/QQ_3.2.32_260812_amd64_01.deb",
+    "pin_commit": "fa52eb71b550551f94fd865afac40ee99a6223f6"
+  },
+  "verification": {
+    "qq_installed": true,
+    "downloads_verified": true,
+    "message_roundtrip_tested": false,
+    "services_running": true,
+    "qq_login_verified": true,
+    "sdk_via_proxy_verified": true
+  },
+  "model": "gpt-6-luna",
+  "persona_status": "用户确认原文已启用",
+  "allowed_group_ids": [
+    "894179464",
+    "1022382380",
+    "427204073"
+  ],
+  "model_provider": "ChatGPTPlan",
+  "reasoning_effort": "high"
+}

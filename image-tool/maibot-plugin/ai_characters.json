@@ -1,0 +1,102 @@
+{
+  "elaina": {
+    "name": "伊蕾娜（Elaina，《魔女之旅》）",
+    "community_features": [
+      "银灰色披散长发、头顶弧形呆毛、紫色眼睛；脸型、刘海及侧发束以官方角色设定图为准",
+      "默认深色宽檐尖顶魔女帽、浅粉紫色帽带和金色垂饰；深色旅行魔女外袍、浅色衬衣、金黄色领结、深色百褶短裙与短靴，细节和配色按参考图",
+      "保持人类耳部、双臂和双腿；没有GPT龙娘的龙角、尖耳、龙翼、鳞片或龙尾，也没有DS娘的鲸鳍和鲸尾",
+      "参考图是一位角色的全身立绘和脸部特写设定板；只提取同一角色的身份与服饰，不照抄拼版、多头像或参考姿势。用户明确换装时更换点名服饰，未点名的脸、发型和身份保持"
+    ],
+    "profiles": {
+      "standard": {
+        "features": [
+          "按官方全身立绘保持正常动漫人物比例；人物数量、姿势、表情、帽子是否佩戴以及场景按本次要求，参考图透明底不代表输出也要透明"
+        ],
+        "reference": {
+          "file": "elaina-standard.png",
+          "sha256": "b2bef69211232c0b0ce6d5ea4caebe2fe044c54c2befb1a289dbb2f2da5bb211",
+          "url": "https://majotabi.jp/assets/character/c1.png?0701"
+        }
+      },
+      "chibi": {
+        "features": [
+          "按同一官方普通比例设定图简化成Q版大头、小躯干和短四肢，保留银灰长发、紫瞳和魔女服饰特征；附图不是另行找到的官方Q版图，不继承普通比例"
+        ],
+        "reference": {
+          "file": "elaina-standard.png",
+          "sha256": "b2bef69211232c0b0ce6d5ea4caebe2fe044c54c2befb1a289dbb2f2da5bb211",
+          "url": "https://majotabi.jp/assets/character/c1.png?0701"
+        }
+      }
+    },
+    "source_note": "用户授权搜索并注册伊蕾娜；采用TV动画官网公开的1440×1440角色设定图，原文件含完整全身立绘及脸部特写，只登记绘图外观，不改写聊天人格或编造角色年龄。Q版沿用同图作身份参考。",
+    "source_page": "https://majotabi.jp/#Character",
+    "checked_at": "2026-10-15"
+  },
+  "claude": {
+    "name": "Claude娘",
+    "community_features": [
+      "橙铜色披散长发、琥珀棕色眼睛；头侧橙色花饰、黑色蝴蝶结与浅色流苏",
+      "奶白、黑色和橙色相间的长裙，褶边高领、束腰、花纹与花饰；鞋和书的样式取自参考",
+      "保持人类耳部和四肢，不混入其他角色的龙角、龙翼、龙尾或鲸鳍"
+    ],
+    "profiles": {
+      "standard": {
+        "features": [
+          "按选中的普通版立绘保持正常动漫人物比例、披散长发和完整长裙；书本可随本次动作要求保留或省略"
+        ],
+        "reference": {
+          "file": "claude-standard.jpg",
+          "sha256": "d44515a530188082d5124350dec12fc4cec82fbca75215073d0d1843321b2581",
+          "url": "https://i.meee.com.tw/goVk46V.jpg"
+        }
+      },
+      "chibi": {
+        "features": [
+          "按同系列Q版图保持大头、小躯干、短四肢；简化同款长发、花饰、长裙与鞋，不套用普通版身材比例"
+        ],
+        "reference": {
+          "file": "claude-chibi.webp",
+          "sha256": "f9409fe8bcd060c51f5f44f1882f95295b33aa7b227ed8e696b6ba0b28491c11",
+          "url": "https://i.meee.com.tw/xSqG3dW.webp"
+        }
+      }
+    },
+    "source_note": "用户选定社区同人系列普通版及同系列Q版，仅登记外观；图片不是官方统一设定。",
+    "source_page": "https://www.pttweb.cc/bbs/C_Chat/M.1790602956.A.EBF",
+    "checked_at": "2026-10-06"
+  },
+  "gpt": {
+    "name": "GPT娘（龙娘）",
+    "community_features": [
+      "白色至淡紫色的披散长发、紫色眼睛、弧形呆毛；两只浅色分节龙角、尖耳与结形发饰",
+      "浅色龙翼和一条连身体的有鳞龙尾；保留人类双臂双腿，不把尾巴画成额外肢体",
+      "白色与淡紫色的长裙、露肩袖饰、结形装饰与流苏；服饰配色和龙类结构以选中的参考图为准"
+    ],
+    "profiles": {
+      "standard": {
+        "features": [
+          "按选中的普通版立绘保持正常动漫人物比例、长发、长裙和龙角龙翼龙尾；漂浮小精灵只在本次要求需要时加入"
+        ],
+        "reference": {
+          "file": "gpt-standard.jpg",
+          "sha256": "5f2cc32033387fe0105c53c02e94ac86863d84989ebcbec00309a9eed28804e7",
+          "url": "https://i.meee.com.tw/kYxFQJc.jpg"
+        }
+      },
+      "chibi": {
+        "features": [
+          "按同系列Q版图保持大头、小躯干、短四肢；保留简化龙角、尖耳、龙翼、带鳞龙尾、白紫长裙和结形发饰"
+        ],
+        "reference": {
+          "file": "gpt-chibi.png",
+          "sha256": "63ce788efdd35bcb7418a8bea4735104a1c849d54b6e0c2485e20856173da2a6",
+          "url": "https://i.meee.com.tw/51vqC2B.png"
+        }
+      }
+    },
+    "source_note": "用户选定社区同人系列普通版及同系列Q版，仅登记外观；图片不是官方统一设定。",
+    "source_page": "https://www.pttweb.cc/bbs/C_Chat/M.1790602956.A.EBF",
+    "checked_at": "2026-10-06"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "id": "local.qqbot-image",
+  "name": "QQbot 生图编辑",
+  "version": "1.3.2",
+  "description": "单入口生成和连续编辑图片，通过受限 MCP 使用 Codex 生图后端。",
+  "author": {"name": "QQbot 本地维护", "url": "http://localhost:8001"},
+  "urls": {"repository": "http://localhost:8001"},
+  "i18n": {"default_locale": "zh-CN", "supported_locales": ["zh-CN"]},
+  "license": "MIT",
+  "host_application": {"min_version": "1.3.0", "max_version": "1.3.99"},
+  "sdk": {"min_version": "2.5.0", "max_version": "2.99.99"},
+  "dependencies": [],
+  "capabilities": ["message.get_by_id", "chat.get_group_streams", "send.image", "send.text"]
+}

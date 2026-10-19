@@ -1,0 +1,11 @@
+# QQ 消息通过 SnowLuma 正向 WebSocket 接入 MaiBot。
+[plugin]
+enabled = true
+config_version = "2.5.0"
+
+[client]
+client_type = "snowluma"
+server = "127.0.0.1"
+port = 3001
+# 在 SnowLuma 启用鉴权后，填写相同令牌。
+token = ""

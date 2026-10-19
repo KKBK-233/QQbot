@@ -1,0 +1,51 @@
+--- a/plugin.py
++++ b/plugin.py
+@@ -4,6 +4,10 @@
+ from maibot_sdk.types import HookOrder, ToolParameterInfo, ToolParamType
+ 
+ from .task_flow import TaskFlow
++from .task_flow import PendingTask, IMAGE_WORDS, IMAGE_EDIT_WORDS, TASK_WORDS, text_item
++from .visual_target import bind_visual_target
++import json
++import time
+ 
+ 
+ class Settings(PluginConfigBase):
+@@ -34,6 +38,37 @@
+     @HookHandler('maisaka.planner.before_request', name='prioritize_explicit_task', timeout_ms=6000)
+     async def before(self, **kwargs):
+         return {'action': 'continue', 'modified_kwargs': await self.flow.before(self.ctx, kwargs)}
++
++    @HookHandler('kkbk.before_request', name='kkbk_current_task', timeout_ms=6000)
++    async def kkbk_before(self, **kwargs):
++        """新引擎使用真实触发编号绑定当前图片，不再扫描旧规划器输出。"""
++        session = str(kwargs.get('session_id') or '')
++        message_id = str(kwargs.get('trigger_message_id') or '')
++        if not session or not message_id or not kwargs.get('requires_reply'):
++            return {'action': 'continue'}
++        message = await self.ctx.message.get_by_id(message_id, chat_id=session)
++        if not message or message.get('session_id') != session:
++            return {'action': 'continue'}
++        body = ' '.join(str(p.get('data', '')) for p in message.get('raw_message', []) if p.get('type') == 'text')
++        task = PendingTask(message_id, body, time.time(),
++                           bool(IMAGE_WORDS.search(body)) and not bool(IMAGE_EDIT_WORDS.search(body)),
++                           is_task=bool(TASK_WORDS.search(body)))
++        self.flow.pending[session] = task
++        await bind_visual_target(self.ctx, session, task, message, bool(IMAGE_EDIT_WORDS.search(body)))
++        data = {'task_message_id': message_id, 'request': body,
++                'image_source_message_ids': getattr(task, 'image_source_message_ids', [])}
++        hint = ('本轮图片来源已经按用户消息绑定。需要识图时调用analyze_task_image，'
++                'message_id使用当前任务或明确的来源编号。结果只用于本轮回答，不能冒充记忆写入。'
++                '可复制任务结果保持原文，不添加错别字。\n' + json.dumps(data, ensure_ascii=False))
++        return {'action': 'continue', 'modified_kwargs': {**kwargs, 'items': [*kwargs.get('items', []),
++                text_item('UserMessageItem', hint)]}}
++
++    @HookHandler('kkbk.after_turn', name='kkbk_clear_task', timeout_ms=1000)
++    async def kkbk_after(self, **kwargs):
++        """请求结束即清理当前任务，下一张图不继承上一张的判断。"""
++        session = str(kwargs.get('session_id') or '')
++        self.flow.pending.pop(session, None)
++        return {'action': 'continue'}
+ 
+     @HookHandler('maisaka.planner.after_response', name='route_explicit_task', timeout_ms=1000)
+     async def after(self, **kwargs):

@@ -1,0 +1,18 @@
+{
+  "source_refs": {
+    "integration": "27c4b30b310f7edb1a4122435108979058a3f552",
+    "maibot": "ed599be3a936e4bf257ecbe48ac2da80957d8cbe",
+    "upstream": "bac9090758668098003d59642b607fb0f1b77337"
+  },
+  "scope": "Committed source snapshot; excludes uncommitted local runtime patches and private runtime data.",
+  "excluded": [
+    "chat records",
+    "credentials",
+    "runtime configs",
+    "databases",
+    "logs",
+    "local diagnostic cases",
+    "uncommitted files",
+    "upstream GitHub workflows"
+  ]
+}

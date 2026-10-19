@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+data/
+logs/
+*.log
+run/
+.venv/
+node_modules/
+MaiBot/config/bot_config.toml
+MaiBot/config/model_config.toml
+image-tool/config.local.json
