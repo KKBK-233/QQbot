@@ -37,7 +37,7 @@ from .prompt import HistoryWindow, build_messages, build_system_prompt, render_h
 from .workflows import build_workflow_guidance, load_workflow_snapshot
 
 logger = get_logger("kkbk_engine")
-PLUGIN_TOOLS = frozenset({"chatgpt_image", "web_search", "read_webpage", "analyze_task_image", "run_python"})
+PLUGIN_TOOLS = frozenset({"chatgpt_image", "web_search", "read_webpage", "analyze_task_image"})
 MAX_INTERNAL_ROUNDS = 10  # 沿用旧运行时的工具循环上限。
 
 

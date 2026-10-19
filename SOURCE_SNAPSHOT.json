@@ -1,7 +1,7 @@
 {
   "source_refs": {
-    "integration": "27c4b30b310f7edb1a4122435108979058a3f552",
-    "maibot": "ed599be3a936e4bf257ecbe48ac2da80957d8cbe",
+    "integration": "3aaeeccd55d07de201ac81bd0aab73953bbc7446",
+    "maibot": "a88a210a3efefc3b31832d0debf0ae322062faa4",
     "upstream": "bac9090758668098003d59642b607fb0f1b77337"
   },
   "scope": "Committed source snapshot; excludes uncommitted local runtime patches and private runtime data.",

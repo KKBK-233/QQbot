@@ -1,4 +1,4 @@
-"""读取本机运行时注册状态，不打印管理凭据，不发送QQ消息。"""
+"""验证已下架的沙箱不再注册，不打印管理凭据或发送 QQ 消息。"""
 
 import json
 from pathlib import Path
@@ -6,19 +6,21 @@ import urllib.request
 
 
 def main():
-    """使用现有管理鉴权，仅检查沙箱工具是否已启用。"""
+    """检查插件下架与特权入口撤销状态，保留历史预算数据。"""
     root = Path('/home/qqbot/QQbot/MaiBot')
     token = json.loads((root / 'data/webui.json').read_text())['access_token']
     request = urllib.request.Request(
-        'http://127.0.0.1:8001/api/webui/plugins/runtime/plugins/local.qqbot-python-sandbox/components',
+        'http://127.0.0.1:8001/api/webui/plugins/installed',
         headers={'Cookie': 'maibot_session=' + token})
     with urllib.request.urlopen(request, timeout=10) as response:
         payload = json.load(response)
-    components = payload.get('components', [])
-    tool = next((c for c in components if c.get('name') == 'run_python'), None)
-    assert payload.get('success') and tool and tool.get('enabled'), payload
-    print(json.dumps({'runtime_registered': True, 'tool': tool['name'], 'enabled': tool['enabled'],
-                      'qq_messages_sent': 0}))
+    plugin = next((p for p in payload.get('plugins', []) if p.get('id') == 'local.qqbot-python-sandbox'), None)
+    assert payload.get('success') and plugin is None, '沙箱仍在插件发现目录'
+    for path in ('/etc/sudoers.d/qqbot-python-sandbox', '/usr/local/libexec/qqbot-python-launch',
+                 '/usr/local/libexec/qqbot-python-kill'):
+        assert not Path(path).exists(), '特权入口仍然存在'
+    print(json.dumps({'runtime_registered': False, 'tool': 'run_python', 'enabled': False,
+                      'privileged_entries_removed': True, 'qq_messages_sent': 0}))
 
 
 if __name__ == '__main__':

@@ -2,6 +2,8 @@
 
 基于 MaiBot 的 QQ AI 项目公开源码快照，用于代码审阅和与网页版 ChatGPT 同步设计。
 
+2026-10-19：离线 Python 已下架，其他额外功能待精简选择。见[功能清单](docs/kkbk-engine/feature-inventory.md)。
+
 ## 从这里开始
 
 - [完整实现计划与进度](docs/kkbk-engine/harness-plan.md)
