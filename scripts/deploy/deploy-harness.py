@@ -22,7 +22,8 @@ def main():
     args=parser.parse_args()
     names=['src/kkbk_engine/runtime.py','src/kkbk_engine/workflows.py']
     if args.phase=='development':
-        names+=['src/kkbk_engine/development.py','src/kkbk_engine/dev_protocol.py']
+        names+=['src/kkbk_engine/development.py','src/kkbk_engine/dev_protocol.py',
+                'src/kkbk_engine/teaching.py','src/kkbk_engine/prompt.py']
     files=[(SOURCE/'MaiBot'/name,TARGET/name) for name in names]
     if args.phase=='workflows':
         files += [(p,TARGET/p.relative_to(SOURCE/'MaiBot'))

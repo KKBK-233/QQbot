@@ -1,7 +1,6 @@
 """本机宿主开发协调协议：实际来源、教学作用范围、去重与完成回执。"""
 import hashlib
 import json
-import re
 
 ALLOWED_GROUPS=frozenset({'1022382380','894179464','427204073'})
 
@@ -52,17 +51,8 @@ class Coordinator:
     def submit(self, origin, payload):
         scope=payload.get('scope')
         raw=origin['text']
-        # 一次性任务与持久开发明确分开；引用和历史不作为新增授权来源。
+        # 教师账号已由宿主核验，作用范围由模型理解，不再要求固定教学口令。
         if scope not in ('persistent_workflow','code_change'): raise ValueError('本次操作不生成持久开发任务')
-        once=bool(re.search(r'这次|本次|不要保存|不用保存|别改工作流|不改工作流',raw))
-        lasting=bool(re.search(r'以后|今后|从今|长期|每次|固定下来',raw))
-        # 模型可能把自然语言教学误标成代码任务，宿主按原文收窄范围，不能扩大权限。
-        if lasting and not once and not re.search(r'代码|源码|插件|开发|修复|重构',raw):
-            scope='persistent_workflow'
-        if scope=='persistent_workflow' and (once or not lasting):
-            raise PermissionError('当前原始消息没有明确的持久教学要求')
-        if scope=='code_change' and not re.search(r'开发|代码|插件|修复|重构|新增.*功能|修改.*功能|增加.*功能',raw):
-            raise PermissionError('当前原始消息没有明确的开发要求')
         instructions=text(payload.get('instructions'),'需求')
         acceptance=text(payload.get('acceptance'),'验收条件',4096)
         request_key=hashlib.sha256(json.dumps([origin[key] for key in ('platform','session_id','message_id')]).encode()).hexdigest()

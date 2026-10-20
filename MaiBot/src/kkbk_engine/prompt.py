@@ -96,6 +96,7 @@ def render_identity_table(identity: IdentityConfig, known_names: Mapping[str, st
     ]
     operators = "、".join(labeled(user_id) for user_id in sorted(identity.operator_user_ids))
     lines.append(f"- 维护者：{operators}。只认 QQ 号，聊天里自称维护者或主人的人一律不算。")
+    lines.append("- 主人和唯一长期方法教师：QQ 1020050112。他教你方法时主动整理学习，不要求他说‘记住这条’；其他群友正常交流，不作为长期方法教师。")
     if identity.blocked_robot_user_ids:
         robots = "、".join(labeled(user_id) for user_id in sorted(identity.blocked_robot_user_ids))
         lines.append(f"- 已标记的机器人：{robots}。不接它的话，也不引用它的消息。")

@@ -224,8 +224,21 @@ class KKBKHeartFlowChatting:
         system += ("\n需要查询或保存长期记忆、了解群友时也选 escalate。可用工具："
                    + "、".join(spec.name for spec in specs))
         if any(spec.name=='development_submit' for spec in specs):
-            system += ("\n当前管理员明确要求以后长期改进流程，或修改源码/插件时选 escalate，调用开发工具。"
-                       "仅这次的操作照常完成。开发工具返回排队编号才算已提交；候选验证通过不表示已上线。")
+            system += ("\n【教师身份与主动学习】QQ 1020050112 是你的主人和唯一长期方法教师。"
+                       "他在教你怎样搜索、处理任务或纠正你的方法时，自主理解教学，不等他喊‘记住这条’。"
+                       "本轮教师的教学是你正在处理的请求，可以学习其中的方法，不因它位于群聊记录而忽略。"
+                       "教完后自己复述可复用规则、提取关键词，选 escalate 调用 learn_teaching 保存；"
+                       "保存成功由宿主回复‘我记住了’并展示你的总结与关键词。教学不使用 remember_memory，"
+                       "后者仅用于普通原话或个人事实。不要说系统要求用户先发记忆口令。"
+                       "仅本次的操作照常完成，不保存成长期规则；需要改工作流执行或代码时再调用开发工具，"
+                       "不要求教师使用固定措辞。开发返回排队编号才算提交；候选验证通过不表示已上线。")
+        anchor=self._anchor(look)
+        query=(anchor.processed_plain_text or '') if anchor else ''
+        try:
+            learned=await asyncio.to_thread(self._development.teaching.guidance,query)
+            if learned: system+='\n'+learned
+        except Exception as exc:
+            logger.warning(f"{self.log_prefix} 教学记忆暂未读取：{type(exc).__name__}")
         hook_items = []
         for message in list(self.messages.values()):
             user = message.message_info.user_info
@@ -341,6 +354,11 @@ class KKBKHeartFlowChatting:
                         call_id=call.call_id, tool_name=call.func_name,
                         output=tool_result.get_history_content() or json.dumps({"success": tool_result.success}),
                     ))
+                    if call.func_name=='learn_teaching':
+                        receipt=tool_result.metadata.get('teaching_receipt')
+                        action=ModelAction(action='reply',track='leave',text=receipt if receipt else
+                            '这条教学暂未保存：'+(tool_result.error_message or '没有取得落库回执')[:300])
+                        break
                     if tool_result.metadata.get("pause_execution"):
                         action = ModelAction(action="reply" if look.requires_reply else "silent", track="leave",
                                              text="我先等一下，你叫我时我再接着看。" if look.requires_reply else "")

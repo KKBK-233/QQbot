@@ -41,25 +41,23 @@ class CoordinatorTests(unittest.TestCase):
                 self.coordinator.dispatch(self.request(origin={**self.origin,**changed}))
         self.assertEqual(self.worker.store.list(),[])
 
-    def test_current_task_and_implicit_teaching_cannot_be_persisted(self):
-        for raw in ('这次先查官方原文','以后也这样，但这次不要保存','普通问候'):
-            with self.subTest(raw=raw),self.assertRaises(PermissionError):
-                self.coordinator.dispatch(self.request(origin={**self.origin,'text':raw}))
+    def test_scope_decision_does_not_require_fixed_words(self):
+        for index,raw in enumerate(('先比较两边结果，再给我可复现的结论','遇到这种页面试试另一个检索入口')):
+            result=self.coordinator.dispatch(self.request(origin={**self.origin,'text':raw,'message_id':str(index)}))
+            self.assertEqual(result['scope'],'persistent_workflow')
         with self.assertRaises(ValueError):
             self.coordinator.dispatch(self.request(payload={**self.payload,'scope':'current_task'}))
 
-    def test_code_development_requires_original_development_request(self):
+    def test_code_development_has_no_original_text_keyword_gate(self):
         payload={**self.payload,'scope':'code_change'}
-        with self.assertRaises(PermissionError):
-            self.coordinator.dispatch(self.request(origin={**self.origin,'text':'在吗'},payload=payload))
-        result=self.coordinator.dispatch(self.request(origin={**self.origin,'text':'修复搜索插件的错误'},payload=payload))
+        result=self.coordinator.dispatch(self.request(origin={**self.origin,'text':'这部分需要支持两种返回格式'},payload=payload))
         self.assertEqual(result['scope'],'code_change')
 
-    def test_host_narrows_misclassified_teaching_to_workflow_scope(self):
+    def test_model_scope_is_honored_without_host_keyword_reclassification(self):
         result=self.coordinator.dispatch(self.request(
             origin={**self.origin,'text':'以后先搜官方，搜不到搜社区，这个规则记下来，生成候选补丁并验证，不用发布'},
             payload={**self.payload,'scope':'code_change'}))
-        self.assertEqual(result['scope'],'persistent_workflow')
+        self.assertEqual(result['scope'],'code_change')
 
     def test_repeated_message_returns_same_pinned_task_after_restart(self):
         first=self.coordinator.dispatch(self.request())

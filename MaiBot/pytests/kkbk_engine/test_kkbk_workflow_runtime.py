@@ -151,6 +151,21 @@ def test_missing_legacy_directory_preserves_tool_path(tmp_path):
     runtime._tool_llm.generate_response_with_context.assert_awaited_once()
 
 
+@pytest.mark.parametrize('success',[True,False])
+def test_teaching_reply_uses_actual_save_receipt_without_extra_model_call(tmp_path,success):
+    runtime,_=runtime_harness(tmp_path/'not-installed')
+    runtime._llm.generate_response_with_context.return_value=response('escalate',task='总结教学')
+    call=SimpleNamespace(func_name='learn_teaching',args={},call_id='learn-one')
+    runtime._tool_llm.generate_response_with_context.return_value=response(call=call)
+    runtime._invoke.return_value=SimpleNamespace(success=success,
+        metadata={'teaching_receipt':'我记住了：先交叉核实。\n关键词：核实'} if success else {},
+        error_message='' if success else 'fixture storage failed',get_history_content=lambda:'fixture')
+    asyncio.run(runtime._turn(look()))
+    sent=runtime._send.await_args.args[0].text
+    assert sent.startswith('我记住了：') if success else sent.startswith('这条教学暂未保存：')
+    assert runtime._tool_llm.generate_response_with_context.await_count==1
+
+
 @pytest.mark.parametrize("requires_reply", [False, True])
 def test_action_retry_preserves_current_reply_requirement(tmp_path, requires_reply):
     """格式补试不得把可沉默的请求变成强制回复。"""

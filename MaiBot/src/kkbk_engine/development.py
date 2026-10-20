@@ -3,6 +3,7 @@ import json
 
 from src.core.tooling import ToolExecutionResult,ToolSpec
 from .dev_protocol import DevelopmentClient,origin_from_context
+from .teaching import TeachingMemory
 
 
 class DevelopmentToolProvider:
@@ -13,6 +14,16 @@ class DevelopmentToolProvider:
     def __init__(self, runtime):
         self.runtime=runtime
         self.client=DevelopmentClient()
+        self._teaching=None
+
+    @property
+    def teaching(self):
+        """沿用现有原生记忆后端，不修改个人事实与普通记忆处理器。"""
+        if self._teaching is None:
+            from src.A_memorix.host_service import a_memorix_host_service
+            from src.services.memory_service import memory_service
+            self._teaching=TeachingMemory(memory_service,a_memorix_host_service.get_runtime_data_dir()/'metadata/metadata.db')
+        return self._teaching
 
     def allowed(self, context):
         identity=self.runtime.config.identity
@@ -22,7 +33,14 @@ class DevelopmentToolProvider:
     async def list_tools(self, context=None):
         if not self.allowed(context): return []
         schemas={
-            'development_submit':('管理员明确要求以后长期这样做，或要求修改代码/插件时，提交异步开发候选。'
+            'learn_teaching':('识别管理员在教你方法时主动学习，不要求他说“记住”。先整理可复用规则和关键词；'
+                '准备回复“我记住了”时调用此工具，落库后宿主会发送你的复述和关键词。'
+                '无需逐字摘录，不把教学方法当个人事实；支持多条管理员消息。',{
+                'summary':{'type':'string','maxLength':2000},
+                'keywords':{'type':'array','items':{'type':'string','maxLength':48},'minItems':1,'maxItems':12},
+                'source_message_ids':{'type':'array','items':{'type':'string'},'maxItems':20}},['summary','keywords']),
+            'development_submit':('管理员的教学需要改工作流执行或源码/插件时，提交异步开发候选。'
+                '由你判断需要的作用范围，不要求原话出现“以后”或“开发”等口令。'
                 '仅本次的指导使用普通任务工具，不提交开发。scope=持久工作流或代码修改；'
                 '只排队，不发布；同一原始消息重复调用返回同一任务。',{
                 'scope':{'type':'string','enum':['persistent_workflow','code_change']},
@@ -43,10 +61,16 @@ class DevelopmentToolProvider:
             if not self.allowed(context): raise PermissionError('仅当前开发管理员可操作')
             origin=origin_from_context(context)
             args=invocation.arguments
-            allowed={'development_submit':{'scope','instructions','acceptance'},
+            allowed={'learn_teaching':{'summary','keywords','source_message_ids'},
+                     'development_submit':{'scope','instructions','acceptance'},
                      'development_status':{'task_id'},'development_cancel':{'task_id'}}
             if invocation.tool_name not in allowed or set(args)-allowed[invocation.tool_name]:
                 raise ValueError('开发工具参数包含未开放字段')
+            if invocation.tool_name=='learn_teaching':
+                result=await self.teaching.learn(origin,self.runtime.messages,args)
+                return ToolExecutionResult(tool_name=invocation.tool_name,success=True,
+                    content=json.dumps(result,ensure_ascii=False),structured_content=result,
+                    metadata={'teaching_receipt':result['reply']})
             operation={'development_submit':'submit','development_status':'status',
                        'development_cancel':'cancel'}[invocation.tool_name]
             if operation=='status' and not args.get('task_id'): operation='list'
