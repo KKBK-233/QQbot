@@ -22,7 +22,8 @@ def main():
     args=parser.parse_args()
     names=['src/kkbk_engine/runtime.py','src/kkbk_engine/workflows.py']
     if args.phase=='task-resume':
-        names=['src/kkbk_engine/runtime.py','src/kkbk_engine/builtin_tools.py','src/kkbk_engine/guards.py']
+        names=['src/kkbk_engine/runtime.py','src/kkbk_engine/builtin_tools.py','src/kkbk_engine/guards.py',
+               'src/kkbk_engine/search_evidence.py']
     if args.phase=='development':
         names+=['src/kkbk_engine/development.py','src/kkbk_engine/dev_protocol.py',
                 'src/kkbk_engine/teaching.py','src/kkbk_engine/prompt.py']

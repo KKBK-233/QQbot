@@ -15,6 +15,7 @@ from src.kkbk_engine.actions import ActionError, ModelAction, ValidationContext,
 from src.kkbk_engine.config import EngineConfig
 from src.kkbk_engine.gate import LookOutcome
 from src.kkbk_engine.guards import ConcurrencyGate, QueueFullError, QueueTimeoutError, SlidingWindowLimiter
+from src.kkbk_engine.search_evidence import SearchEvidence
 from src.kkbk_engine.workflows import build_workflow_guidance, load_workflow_snapshot
 
 from test_kkbk_workflows import setup_files
@@ -53,6 +54,7 @@ def runtime_harness(root):
         "ToolExecutionResult": ToolResult, "ToolInvocation": lambda **kwargs: SimpleNamespace(**kwargs),
         "ToolExecutionContext": lambda **kwargs: SimpleNamespace(**kwargs),
         "ConcurrencyGate": ConcurrencyGate, "QueueFullError": QueueFullError, "QueueTimeoutError": QueueTimeoutError,
+        "SearchEvidence": SearchEvidence,
     }
     # 一并编译实际名称白名单，避免测试自行放宽工具选择。
     exec(compile(ast.Module(body=[plugin_tools, klass], type_ignores=[]), str(path), "exec"), namespace)
@@ -393,3 +395,29 @@ def test_builtin_wait_returns_resumable_result(seconds, success):
     assert "pause_execution" not in result.metadata
     if success:
         assert result.metadata["resume_after_seconds"] == seconds
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_search_budget_exhaustion_delivers_actual_evidence_without_lossy_model_summary(tmp_path, success):
+    runtime, _ = runtime_harness(tmp_path / "not-installed")
+    runtime._llm.generate_response_with_context.return_value = response("escalate", task="查清事件")
+    call = SimpleNamespace(func_name="web_search", args={}, call_id="search")
+    runtime._tool_llm.generate_response_with_context.return_value = response(call=call)
+
+    async def search(*args, wait_budget):
+        wait_budget[0] = 0
+        return ToolResult(success=success, content=(
+            "1. 官方仓库\n已取得项目说明，但事件原因还未核实。\n来源：https://github.com/example/project"
+            if success else "未取得结果"))
+
+    runtime._invoke.side_effect = search
+    asyncio.run(runtime._turn(look()))
+    delivered = runtime._send.await_args.args[0].text
+    if success:
+        assert "官方仓库" in delivered and "https://github.com/example/project" in delivered
+        assert "阶段结果" in delivered and "尚未完成" in delivered
+    else:
+        assert "暂未取得可用资料" in delivered and "官方仓库" not in delivered
+    # 预算耗尽后不再请求模型，避免再次把已有来源说成一条都没搜到。
+    assert runtime._tool_llm.generate_response_with_context.await_count == 1
+    assert len(delivered) <= runtime.config.reply.max_chars
