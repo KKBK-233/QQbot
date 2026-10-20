@@ -18,16 +18,19 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images'])
     args=parser.parse_args()
-    names=['src/kkbk_engine/runtime.py','src/kkbk_engine/workflows.py']
-    if args.phase=='task-resume':
-        names=['src/kkbk_engine/runtime.py','src/kkbk_engine/builtin_tools.py','src/kkbk_engine/guards.py',
-               'src/kkbk_engine/search_evidence.py']
+    # 运行时的直接依赖一起更新，避免只复制 runtime 后与旧预算或工具协议不兼容。
+    names=['src/kkbk_engine/runtime.py','src/kkbk_engine/workflows.py','src/kkbk_engine/config.py',
+           'src/kkbk_engine/builtin_tools.py','src/kkbk_engine/guards.py','src/kkbk_engine/search_evidence.py',
+           'src/kkbk_engine/forward.py']
     if args.phase=='development':
         names+=['src/kkbk_engine/development.py','src/kkbk_engine/dev_protocol.py',
                 'src/kkbk_engine/teaching.py','src/kkbk_engine/prompt.py']
     files=[(SOURCE/'MaiBot'/name,TARGET/name) for name in names]
+    if args.phase=='forward-images':
+        files += [(SOURCE/'MaiBot/plugins/qqbot-task-assist/plugin.py',TARGET/'plugins/qqbot-task-assist/plugin.py'),
+                  (SOURCE/'image-tool/maibot-plugin/forward_vision.py',TARGET/'plugins/qqbot-task-assist/forward_vision.py')]
     if args.phase=='workflows':
         files += [(p,TARGET/p.relative_to(SOURCE/'MaiBot'))
                   for p in (SOURCE/'MaiBot/workflows').rglob('*.json')]

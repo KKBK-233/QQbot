@@ -15,7 +15,7 @@ visual_repair.apply(source)
 
 # 两种工具共用媒体读取和 QQ 补取；仅增加查询真实群会话所需的只读能力。
 helper_folder = Path('/mnt/d/code/web/QQbot/image-tool/maibot-plugin')
-for name in ('message_media.py', 'qq_media.py'):
+for name in ('message_media.py', 'qq_media.py', 'forward_vision.py'):
     shutil.copy2(helper_folder / name, source / name)
 manifest_path = source / '_manifest.json'
 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
@@ -25,7 +25,7 @@ if manifest['version'] == '1.0.4':
     manifest['version'] = '1.0.5'
 manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 target.mkdir(exist_ok=True)
-for name in ['_manifest.json', 'plugin.py', 'task_flow.py', 'visual_target.py', 'message_media.py', 'qq_media.py', 'test_task_flow.py', 'README.md']:
+for name in ['_manifest.json', 'plugin.py', 'task_flow.py', 'visual_target.py', 'message_media.py', 'qq_media.py', 'forward_vision.py', 'test_task_flow.py', 'README.md']:
     shutil.copy2(source / name, target / name)
     assert (source / name).read_bytes() == (target / name).read_bytes()
 print('任务与引用识图插件部署完成，文件逐项一致。')

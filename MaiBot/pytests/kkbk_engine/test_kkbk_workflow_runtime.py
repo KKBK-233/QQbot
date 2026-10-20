@@ -311,7 +311,8 @@ def test_exhaustion_summarizes_results_with_tools_disabled(tmp_path, monkeypatch
     runtime._registry.invoke.return_value = ToolResult(content="实际结果", metadata={"resume_after_seconds": 60} if name == "wait" else {})
     asyncio.run(runtime._turn(look()))
     assert requests[-1][1]["tool_options"] == []
-    assert runtime._registry.invoke.await_count == (2 if cause == "wait_budget" else 10)
+    assert runtime._registry.invoke.await_count == (runtime.config.task.max_wait_seconds // 60
+                                                  if cause == "wait_budget" else runtime.config.task.max_tool_rounds)
     assert runtime._send.await_args.args[0].text == "已有结果；其余尚未完成"
 
 

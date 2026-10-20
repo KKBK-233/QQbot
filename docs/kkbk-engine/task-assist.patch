@@ -11,11 +11,10 @@
  
  
  class Settings(PluginConfigBase):
-@@ -34,6 +38,37 @@
-     @HookHandler('maisaka.planner.before_request', name='prioritize_explicit_task', timeout_ms=6000)
+@@ -35,15 +39,54 @@
      async def before(self, **kwargs):
          return {'action': 'continue', 'modified_kwargs': await self.flow.before(self.ctx, kwargs)}
-+
+ 
 +    @HookHandler('kkbk.before_request', name='kkbk_current_task', timeout_ms=6000)
 +    async def kkbk_before(self, **kwargs):
 +        """新引擎使用真实触发编号绑定当前图片，不再扫描旧规划器输出。"""
@@ -46,6 +45,27 @@
 +        session = str(kwargs.get('session_id') or '')
 +        self.flow.pending.pop(session, None)
 +        return {'action': 'continue'}
- 
++
      @HookHandler('maisaka.planner.after_response', name='route_explicit_task', timeout_ms=1000)
      async def after(self, **kwargs):
+         return {'action': 'continue', 'modified_kwargs': self.flow.after(kwargs)}
+ 
+-    @Tool('analyze_task_image', description='读取本群指定历史消息、附图、引用或合并转发里的图片，提取特征或反推提示词。message_id可填写之前图片消息的编号，不必等于当前任务编号；多张候选不明确时先确认。最多分析两张，结果不能当作已写入长期记忆。',
+-          parameters=[ToolParameterInfo(name='message_id', param_type=ToolParamType.STRING, description='本群图片/转发消息编号，或附带图片引用的任务编号', required=True)],
++    @Tool('analyze_task_image', description='读取本群指定消息、引用或合并转发的原图。转发图片按完整记录深度优先编号，image_numbers 可选取折叠内容里的图片，每次最多4张，可分批读取；未指定时先读转发前4张并返回剩余序号，普通消息沿用最多2张。只据本批原图回答，不把占位符当成已经看过图片。',
++          parameters=[ToolParameterInfo(name='message_id', param_type=ToolParamType.STRING, description='本群图片/转发消息编号，或附带图片引用的任务编号', required=True),
++                      ToolParameterInfo(name='image_numbers', param_type=ToolParamType.ARRAY, description='可选，完整转发记录中1起算的图片序号，最多4个不同正整数，例如[3,4]', required=False)],
+           visibility='visible', core_tool=True, timeout_ms=60000)
+     async def analyze(self, message_id: str, **kwargs):
+-        return await self.flow.analyze(self.ctx, str(kwargs.get('stream_id') or kwargs.get('chat_id') or ''), message_id)
++        session = str(kwargs.get('stream_id') or kwargs.get('chat_id') or '')
++        from .forward_vision import analyze_forward_images, has_forward
++        if kwargs.get('image_numbers') is not None or await has_forward(self.ctx, session, message_id):
++            from .task_flow import prepare_image
++            task = self.flow.pending.get(session)
++            return await analyze_forward_images(self.ctx, session, message_id, kwargs.get('image_numbers'),
++                prepare_image, task.text if task else '提取这些转发图片中的可见信息。')
++        return await self.flow.analyze(self.ctx, session, message_id)
+ 
+     @HookHandler('maisaka.replyer.before_request', name='deliver_task_reference', order=HookOrder.LATE, timeout_ms=1000)
+     async def reply_before(self, **kwargs):

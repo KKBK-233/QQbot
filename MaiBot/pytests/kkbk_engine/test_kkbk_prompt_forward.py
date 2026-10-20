@@ -76,6 +76,21 @@ def test_forward_images_are_numbered() -> None:
     assert "[图片1][图片2][图片3]" in render.text
 
 
+def test_forward_preserves_description_and_exposes_readable_image_numbers() -> None:
+    render = render_forward([node(content=[{"type": "image", "hash": "h1", "data": "一张公告截图"}])], ForwardLimits())
+    assert "[图片1]（已有描述：一张公告截图）" in render.text
+    assert "analyze_task_image" in render.text and "image_numbers" in render.text
+    assert "外层群消息编号" in render.text
+
+
+def test_image_numbers_stay_global_when_nested_nodes_are_folded() -> None:
+    nested = forward_segment([node(content=[{"type": "image", "hash": "inner"}])])
+    nodes = [node(content=[nested]), node(content=[{"type": "image", "hash": "outer"}])]
+    render = render_forward(nodes, ForwardLimits(max_depth=1))
+    assert render.image_count == 2
+    assert "[图片2]" in render.text and "[图片1]" not in render.text
+
+
 # ---------------- prompt ----------------
 
 

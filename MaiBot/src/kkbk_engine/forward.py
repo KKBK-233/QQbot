@@ -25,7 +25,7 @@ class ForwardRender:
     lines: List[str]
     """L1 展开行，已按层级缩进。"""
     image_hashes: List[str]
-    """L1 中出现的图片，按 [图片N] 编号顺序排列，供 L2 申请识图。"""
+    """L1 中出现的图片哈希；图片序号按完整记录的深度优先顺序确定。"""
     folded_nodes: int
     truncated: bool
 
@@ -47,6 +47,10 @@ class ForwardRender:
     def text(self) -> str:
         """L1：结构摘要 + 展开内容 + 折叠说明。"""
         parts = [self._header(), *self.lines]
+        if self.image_count:
+            parts.append(f"（共有 {self.image_count} 张原图，含折叠节点。图片标记不是图像本身；"
+                         "需看细节时调用 analyze_task_image，message_id 用这条外层群消息编号，"
+                         "image_numbers 按图片序号选择，每次最多 4 张；可分批读取。）")
         if self.folded_nodes:
             parts.append(f"（另有 {self.folded_nodes} 条未展开）")
         elif self.truncated:
@@ -57,7 +61,7 @@ class ForwardRender:
 def render_forward(nodes: ForwardNodes, limits: ForwardLimits) -> ForwardRender:
     stats = _Stats(preview_chars=limits.preview_chars)
     stats.walk(nodes, depth=1)
-    expander = _Expander(limits)
+    expander = _Expander(limits, stats.image_indices)
     expander.walk(nodes, depth=1)
     return ForwardRender(
         node_count=stats.nodes,
@@ -95,6 +99,7 @@ class _Stats:
     images: int = 0
     senders: List[str] = field(default_factory=list)
     preview: str = ""
+    image_indices: Dict[int, int] = field(default_factory=dict)
 
     def walk(self, nodes: ForwardNodes, depth: int) -> None:
         self.depth = max(self.depth, depth)
@@ -111,6 +116,7 @@ class _Stats:
                         self.preview = (self.preview + text)[: self.preview_chars]
                 elif segment_type == "image":
                     self.images += 1
+                    self.image_indices[id(segment)] = self.images
                 elif segment_type == "forward":
                     self.walk(segment.get("data") or (), depth + 1)
 
@@ -118,8 +124,9 @@ class _Stats:
 class _Expander:
     """按层数、节点数、字数上限展开转发文字。"""
 
-    def __init__(self, limits: ForwardLimits) -> None:
+    def __init__(self, limits: ForwardLimits, image_indices: Mapping[int, int]) -> None:
         self._limits = limits
+        self._image_indices = image_indices
         self.lines: List[str] = []
         self.image_hashes: List[str] = []
         self.folded_nodes = 0
@@ -156,7 +163,10 @@ class _Expander:
             return str(segment.get("data") or "")
         if segment_type == "image":
             self.image_hashes.append(str(segment.get("hash") or ""))
-            return f"[图片{len(self.image_hashes)}]"
+            number = self._image_indices[id(segment)]
+            description = segment.get("description") or segment.get("data") or ""
+            detail = f"（已有描述：{description[:100]}）" if isinstance(description, str) and description.strip() else ""
+            return f"[图片{number}]" + detail
         if segment_type == "emoji":
             return "[表情]"
         if segment_type == "at":

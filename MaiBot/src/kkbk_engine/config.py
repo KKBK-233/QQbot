@@ -84,6 +84,14 @@ class HistoryConfig:
 
 
 @dataclass(frozen=True)
+class TaskBudget:
+    """单轮工具预算；频率限流另外计算，避免预算扩大后突发刷接口。"""
+
+    max_tool_rounds: int = 20
+    max_wait_seconds: float = 240.0
+
+
+@dataclass(frozen=True)
 class EngineConfig:
     """引擎全部静态参数。"""
 
@@ -93,3 +101,4 @@ class EngineConfig:
     reply: ReplyLimits = field(default_factory=ReplyLimits)
     forward: ForwardLimits = field(default_factory=ForwardLimits)
     history: HistoryConfig = field(default_factory=HistoryConfig)
+    task: TaskBudget = field(default_factory=TaskBudget)

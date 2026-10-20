@@ -28,7 +28,8 @@ class KKBKBuiltinToolProvider:
         specs = [entry.build_spec() for entry in self.entries.values()]
         for spec in specs:
             if spec.name == "wait":
-                spec.description = "等待指定秒数后自动继续当前任务，保留已有工具结果；不需要用户再次唤醒。单次最多 60 秒，本轮累计等待最多 120 秒。"
+                spec.description = ("等待指定秒数后自动继续当前任务，保留已有工具结果；不需要用户再次唤醒。"
+                                    f"单次最多 60 秒，本轮累计等待最多 {self.runtime.config.task.max_wait_seconds:g} 秒。")
                 spec.parameters_schema = {"type": "object", "properties": {
                     "seconds": {"type": "integer", "minimum": 0, "maximum": 60}},
                     "required": ["seconds"]}
