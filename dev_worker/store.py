@@ -144,11 +144,11 @@ class Store:
                 db.execute('UPDATE tasks SET cancel_requested=1 WHERE id=?',(task_id,))
         return self.get(task_id)
 
-    def recover(self):
+    def recover(self, project=lambda value:value):
         """只由取得 worker 锁的进程调用，不自动重跑可能已经产生副作用的任务。"""
         with self.connect() as db:
             rows = db.execute("SELECT id FROM tasks WHERE status='running'").fetchall()
         for row in rows:
             self.finish(row['id'],'failed','worker_interrupted')
-            atomic_json(self.directory(row['id'])/'summary.json',self.get(row['id']))
+            atomic_json(self.directory(row['id'])/'summary.json',project(self.get(row['id'])))
         return len(rows)

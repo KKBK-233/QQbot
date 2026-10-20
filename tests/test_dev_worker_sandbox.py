@@ -48,4 +48,16 @@ class SandboxTests(unittest.TestCase):
         time.sleep(1.8)
         self.assertFalse((self.folder/'ws/leaked.txt').exists())
 
+    def test_workspace_venv_mount_writes_only_task_environment(self):
+        target=self.folder/'ws/.dev-worker-venv/fixture.txt'
+        base=self.cfg.base_venv/'base.txt'; base.write_text('baseline')
+        code=("from pathlib import Path; "
+              f"Path({str(target)!r}).write_text('task dependency'); "
+              f"p=Path({str(base)!r}); assert p.read_text()=='baseline'; "
+              "\ntry:\n p.write_text('modified')\nexcept OSError:\n pass\nelse:\n raise AssertionError('base venv writable')")
+        result=self.run_code(code)
+        self.assertEqual(result.exit_code,0,(self.folder/'err').read_text())
+        self.assertEqual((self.folder/'venv/fixture.txt').read_text(),'task dependency')
+        self.assertEqual(base.read_text(),'baseline')
+
 if __name__=='__main__': unittest.main()

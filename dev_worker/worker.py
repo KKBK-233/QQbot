@@ -3,17 +3,18 @@ from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 import json
-import re
 import time
 
 from .config import WorkerConfig
 from .process import Stopped, run_process
+from .redaction import Redactor
 from .store import Store, atomic_json, exclusive_lock
 from .workspace import (agent_command,agent_env,collect_patch,prepare_clone,prepare_environment,
                         resolve_commit,test_command)
 
-def event_summary(path: Path):
+def event_summary(path: Path, redactor=None):
     """读取 DSH 事件，不把 final 自述或退出码单独视为测试成功。"""
+    redactor=redactor or Redactor()
     tools=Counter()
     final=''
     session=None
@@ -27,14 +28,13 @@ def event_summary(path: Path):
             kind=event.get('type')
             if kind=='session': session=event.get('sessionId')
             if kind=='tool_call': tools[str(event.get('tool','unknown'))]+=1
-            if kind=='final': final=str(event.get('text',''))[-8192:]
+            if kind=='final': final=redactor.text(str(event.get('text','')))[-8192:]
             if kind=='error':
-                message=str(event.get('message',event.get('error','')))[:512]
-                errors.append(re.sub(r'\bsk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9]+','[credential]',message))
+                message=redactor.text(str(event.get('message',event.get('error',''))))[:512]
+                errors.append(message)
             if isinstance(event.get('usage'),dict): usage=event['usage']
-    final=re.sub(r'\bsk-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9]+','[credential]',final)
-    return {'session_id':session,'final':final,'tool_calls':dict(tools),
-            'last_reported_usage':usage,'event_errors':errors[-5:]}
+    return redactor.value({'session_id':session,'final':final,'tool_calls':dict(tools),
+            'last_reported_usage':usage,'event_errors':errors[-5:]})
 
 def outcome(agent_exit,patch_bytes,test_exit,events):
     if agent_exit != 0: return 'failed','agent_failed'
@@ -48,6 +48,7 @@ class Worker:
         config.validate()
         self.config=config
         self.store=Store(config.root)
+        self.redactor=Redactor.from_env_file(config.dsh_home/'.env')
 
     def submit(self,requester,task,base_ref=None):
         # 这里只是本地操作员 CLI 的白名单；远程身份认证在阶段三接入。
@@ -63,7 +64,7 @@ class Worker:
     def run_once(self):
         """持锁恢复中断状态，再原子领取一项；没有自动重试或发布。"""
         with exclusive_lock(self.config.lock_path):
-            self.store.recover()
+            self.store.recover(project=self.redactor.value)
             task=self.store.claim()
             if task is None: return None
             return self.execute(task)
@@ -91,10 +92,10 @@ class Worker:
             response=run_process(agent_command(cfg,folder,task['spec']['task']),cwd=folder/'ws',
                 env=agent_env(cfg,folder),stdout=folder/'events.jsonl',stderr=folder/'stderr.log',
                 timeout=cfg.agent_timeout_sec,cancel=cancelled,max_bytes=cfg.max_log_bytes,
-                idle_timeout=cfg.agent_idle_timeout_sec)
+                idle_timeout=cfg.effective_agent_idle_timeout_sec)
             result['agent_exit']=response.exit_code
             result['durations']['agent']=round(response.seconds,3)
-            result['events']=event_summary(folder/'events.jsonl')
+            result['events']=event_summary(folder/'events.jsonl',self.redactor)
             self.store.phase(task_id,'collect')
             patch=collect_patch(cfg,folder,task['spec']['base_commit'],cancelled)
             result['patch']=patch
@@ -119,14 +120,14 @@ class Worker:
             status,reason,interrupted='cancelled','worker_stopped',True
         except Exception as exc:
             # 仅记录异常类型与受控消息；原始工具日志留在私有开发目录。
-            result['error']=type(exc).__name__+': '+str(exc)[:512]
+            result['error']=type(exc).__name__+': '+self.redactor.text(str(exc))[:512]
             status,reason='failed','worker_error'
         finally:
             result['durations']['total']=round(time.monotonic()-started,3)
             for name in ('events.jsonl','stderr.log','patch.diff','test.log','test.err'):
                 if (folder/name).exists(): result['artifacts'][name]=name
-            self.store.finish(task_id,status,reason,result)
+            self.store.finish(task_id,status,reason,self.redactor.value(result))
             completed=self.store.get(task_id)
-            atomic_json(folder/'summary.json',completed)
+            atomic_json(folder/'summary.json',self.redactor.value(completed))
         if interrupted: raise KeyboardInterrupt
         return completed

@@ -15,7 +15,7 @@ from dev_worker.config import WorkerConfig
 from dev_worker.process import Stopped,run_process
 from dev_worker.store import Store,atomic_json,exclusive_lock
 from dev_worker.worker import Worker,event_summary,outcome
-from dev_worker.workspace import agent_env,sandbox_command
+from dev_worker.workspace import agent_env,sandbox_command,prepare_clone,resolve_commit,visible_venv
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):
@@ -52,6 +52,31 @@ class WorkerTests(unittest.TestCase):
         self.assertNotEqual(before,self.git('rev-parse','HEAD').decode().strip())
         self.assertEqual(worker.store.get(task['id'])['spec']['base_commit'],before)
         self.assertEqual(worker.store.get(task['id'])['status'],'queued')
+
+    def test_silent_tool_has_full_timeout_and_event_delivery_margin(self):
+        self.assertEqual(self.cfg.effective_agent_idle_timeout_sec,930)
+        self.assertEqual(replace(self.cfg,bash_timeout_ms=900_001).effective_agent_idle_timeout_sec,931)
+        self.assertEqual(replace(self.cfg,agent_idle_timeout_sec=1200).effective_agent_idle_timeout_sec,1200)
+        with patch('dev_worker.worker.run_process',wraps=run_process) as execute:
+            result,_=self.run_fake()
+        self.assertEqual(result['status'],'succeeded')
+        agent_call=next(call for call in execute.call_args_list if 'idle_timeout' in call.kwargs)
+        self.assertEqual(agent_call.kwargs['idle_timeout'],930)
+
+    def test_local_clone_checks_out_commit_only_referenced_by_remote_tracking_ref(self):
+        base=self.git('rev-parse','HEAD').decode().strip()
+        (self.source/'original.txt').write_text('remote-only commit\n')
+        self.git('commit','-qam','remote-only')
+        commit=self.git('rev-parse','HEAD').decode().strip()
+        self.git('update-ref','refs/remotes/origin/main',commit)
+        self.git('reset','--hard',base)
+        self.git('gc','--prune=now')
+        self.assertEqual(resolve_commit(self.cfg,'origin/main'),commit)
+        folder=self.cfg.root/'fixture'; folder.mkdir(parents=True)
+        workspace=prepare_clone(self.cfg,folder,commit,lambda:False)
+        cloned=subprocess.check_output(['git','-C',str(workspace),'rev-parse','HEAD']).decode().strip()
+        self.assertEqual(cloned,commit)
+        self.assertEqual((workspace/'original.txt').read_text(),'remote-only commit\n')
 
     def test_task_paths_terminal_state_and_cancel(self):
         store=Store(self.cfg.root)
@@ -109,6 +134,9 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn(str(folder),command)
         self.assertNotIn(str(self.source),command)
         self.assertNotIn(str(self.cfg.root/'worker.sqlite3'),command)
+        self.assertEqual(agent_env(cfg,folder)['VIRTUAL_ENV'],str(visible_venv(cfg,folder)))
+        self.assertEqual(visible_venv(cfg,folder),folder/'ws/.dev-worker-venv')
+        self.assertIn(str(visible_venv(cfg,folder)),command)
         self.assertIn('/mnt',command)
         key_index=command.index(str(self.cfg.dsh_home/'.env'))
         self.assertEqual(command[key_index-1],'--ro-bind')

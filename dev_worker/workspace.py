@@ -9,6 +9,13 @@ import subprocess
 
 from .process import run_process
 
+TASK_VENV_MOUNT = '.dev-worker-venv'
+
+
+def visible_venv(config, folder):
+    """DSH 内层仅允许工作区写入，提供同一任务 venv 的工作区内挂载入口。"""
+    return folder/'ws'/TASK_VENV_MOUNT if config.use_sandbox else folder/'venv'
+
 def host_env(config):
     """Git 只使用 worker 专用配置，不继承凭据或影响用户全局 Git。"""
     config.root.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -78,6 +85,19 @@ def prepare_environment(config, folder, cancel):
     task_sites=list((venv/'lib').glob('python*/site-packages'))
     if len(base_sites)!=1 or len(task_sites)!=1: raise RuntimeError('开发 venv 目录结构异常')
     (task_sites[0]/'base.pth').write_text(str(base_sites[0])+'\n')
+    if config.use_sandbox:
+        mount=visible_venv(config,folder)
+        if mount.exists() or mount.is_symlink(): raise RuntimeError('源码占用了任务 venv 保留路径')
+        mount.mkdir()
+        # pip 等入口脚本和 activate 不能再指向内层只读的宿主路径。
+        for script in (venv/'bin').iterdir():
+            if script.is_symlink() or not script.is_file(): continue
+            raw=script.read_bytes()
+            script.write_bytes(raw.replace(str(venv).encode(),str(mount).encode()))
+        # 目录仅作为挂载入口；真实依赖在工作树外，不能进入候选补丁。
+        exclude=folder/'ws/.git/info/exclude'
+        with exclude.open('a',encoding='utf-8') as stream:
+            stream.write('\n/'+TASK_VENV_MOUNT+'/\n')
     home=folder/'agent-home'
     profile=home/'profiles/headless'
     profile.mkdir(parents=True,mode=0o700)
@@ -94,9 +114,11 @@ def prepare_environment(config, folder, cancel):
 
 def agent_env(config,folder):
     """最小环境不导出空密钥，DSH 在隔离环境读取专用凭据文件。"""
-    env={'PATH':str(folder/'venv/bin')+os.pathsep+config.agent_path,
+    venv=visible_venv(config,folder)
+    env={'PATH':str(venv/'bin')+os.pathsep+config.agent_path,
             'HOME':str(folder/'agent-home'),'DSH_HOME':str(folder/'agent-home'),
-            'DSH_TELEMETRY_DISABLED':'1','LANG':'C.UTF-8','VIRTUAL_ENV':str(folder/'venv'),
+            'DSH_TELEMETRY_DISABLED':'1','LANG':'C.UTF-8','VIRTUAL_ENV':str(venv),
+            'PIP_CACHE_DIR':str(venv/'.cache/pip'),
             'PYTHONDONTWRITEBYTECODE':'1','GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_NOSYSTEM':'1'}
     if os.name=='nt':
         for name in ('SYSTEMROOT','WINDIR','TEMP','TMP'):
@@ -114,6 +136,7 @@ def sandbox_command(config,folder,command,*,agent=False):
           '--unshare-pid','--unshare-ipc','--unshare-uts','--die-with-parent','--new-session',
           '--cap-drop','ALL','--bind',str(folder/'ws'),str(folder/'ws'),
           '--bind',str(folder/'venv'),str(folder/'venv'),
+          '--bind',str(folder/'venv'),str(visible_venv(config,folder)),
           '--ro-bind',str(config.base_venv),str(config.base_venv),
           '--bind',str(folder/'agent-home'),str(folder/'agent-home')]
     if agent:

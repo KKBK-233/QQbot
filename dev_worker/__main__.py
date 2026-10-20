@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from .config import WorkerConfig
+from .redaction import Redactor
 from .store import exclusive_lock
 from .worker import Worker
 from .workspace import setup_base
@@ -16,6 +17,7 @@ class Parser(argparse.ArgumentParser):
         raise ValueError(message)
 
 def main(argv=None):
+    redactor=Redactor.from_env_file()
     parser=Parser(description=__doc__)
     commands=parser.add_subparsers(dest='command',required=True)
     submit=commands.add_parser('submit')
@@ -32,6 +34,7 @@ def main(argv=None):
     try:
         args=parser.parse_args(argv)
         config=WorkerConfig.from_env()
+        redactor=Redactor.from_env_file(config.dsh_home/'.env')
         worker=Worker(config)
         if args.command=='submit':
             raw=args.task_file.read_bytes()
@@ -50,16 +53,16 @@ def main(argv=None):
             while True:
                 result=worker.run_once()
                 if not args.loop: break
-                if result: print(json.dumps(result,ensure_ascii=False),flush=True)
+                if result: print(json.dumps(redactor.value(result),ensure_ascii=False),flush=True)
                 time.sleep(2)
         task_failed=args.command=='run' and result is not None and result['status']!='succeeded'
-        print(json.dumps({'success':not task_failed,'result':result},ensure_ascii=False),flush=True)
+        print(json.dumps(redactor.value({'success':not task_failed,'result':result}),ensure_ascii=False),flush=True)
         return 2 if task_failed else 0
     except KeyboardInterrupt:
         print(json.dumps({'success':False,'error':'worker_stopped'}),file=sys.stderr)
         return 130
     except Exception as exc:
-        print(json.dumps({'success':False,'error':type(exc).__name__,'detail':str(exc)[:512]},ensure_ascii=False),file=sys.stderr)
+        print(json.dumps({'success':False,'error':type(exc).__name__,'detail':redactor.text(str(exc))[:512]},ensure_ascii=False),file=sys.stderr)
         return 1
 
 if __name__=='__main__':

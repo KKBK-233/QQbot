@@ -35,6 +35,8 @@ wsl -d Ubuntu -u qqbot -- env PYTHONPATH=/mnt/d/code/web/QQbot python3 -B -m dev
 
 `setup --full` 才安装源码仓 requirements.txt 中的完整开发依赖。默认引擎纯测试不需要生产全量依赖。任务也可以通过自己的 venv 安装所需依赖，基础 venv 对代理只读。
 
+任务 venv 实体位于工作树外，通过工作区内 `.dev-worker-venv/` 挂载供 DSH 使用，`PATH`、`VIRTUAL_ENV` 与 pip 缓存均指向该入口。这样内层仍保持 `workspace-write`，无需放宽到全文件系统写入。挂载入口由 Git 本地 exclude 排除，依赖不进入补丁；源码不能占用这个保留目录。
+
 `--requester` 是本地可信操作员提供的审计字段和白名单检查，不构成远程认证。不能把这个 CLI 参数直接暴露给模型或群友，未来 QQ 调用必须由宿主绑定实际发送者。
 
 CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，命令或配置错误为 1，进程停止为 130，成功或无待办为 0。查询一个失败任务的 status 命令仍返回 0，因为查询本身成功。
@@ -50,7 +52,7 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 | `BASE_REF` | `codex/kkbk-engine-integration`，提交任务时固定为 commit |
 | `TEST_COMMAND` | `-m pytest -q --noconftest -p no:cacheprovider pytests/kkbk_engine`，作为 Python 参数执行 |
 | `ALLOWED_REQUESTERS` | `1020050112`，多个以逗号分隔 |
-| `AGENT_TIMEOUT` / `AGENT_IDLE_TIMEOUT` | 1800 秒 / 300 秒无事件输出 |
+| `AGENT_TIMEOUT` / `AGENT_IDLE_TIMEOUT` | 总期限 1800 秒；无输出配置值 300 秒，实际至少为 bash 上限向上取整后加 30 秒，默认 930 秒 |
 | `TEST_TIMEOUT` / `PREPARE_TIMEOUT` | 1800 秒 / 600 秒 |
 | `BASH_TIMEOUT_MS` | 900000，DSH 单工具超时仍受总代理期限约束 |
 | `MAX_LOG_BYTES` / `MAX_PATCH_BYTES` | 每阶段输出合计 8 MiB / 补丁 4 MiB |
@@ -58,6 +60,8 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 | `SANDBOX` | 默认 true；真实 CLI run 不接受关闭隔离 |
 
 当前每项任务针对一个完整的已提交 Git 仓。默认是 MaiBot；选择根集成仓或独立插件仓时，需要同时配置对应测试命令。尚未自动组合多个嵌套仓，也不复制任何未提交补丁。因此工作副本不是生产实例的逐字镜像。
+
+无输出保护按 stdout/stderr 文件增长计时，不将静默的工具运行直接视为卡住。实际空闲期限取 `max(AGENT_IDLE_TIMEOUT, ceil(BASH_TIMEOUT_MS / 1000) + 30)`；总任务期限仍优先生效。当前本地路径克隆可按固定 SHA 检出只由源仓远端跟踪引用持有的提交，不要求它出现在克隆后的分支列表中。
 
 ## 状态与产物
 
@@ -73,6 +77,8 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 - 记录测试前后补丁摘要；测试若改动实际源码，本轮拒绝当作已验证版本。
 
 每任务目录包含 `ws/`、任务 venv、私有 DSH home、`events.jsonl`、`stderr.log`、`patch.diff`、`test.log`、`test.err` 和 `summary.json`。原始日志、任务正文和模型思考均属于私有开发资料，不自动上传 GitHub。用量只记录最后一次供应商报告值，不将累计与单轮字段混加，也不推算账单。
+
+结果字段、完成/恢复快照和 CLI 展示会脱敏：读取专用 `.env` 与宿主敏感环境字段中的已知原值，并遮盖常见令牌前缀、认证头、敏感赋值、URL 用户密码及 PEM 私钥。先脱敏再截断，数值用量保留。私有 SQLite 中的任务原文及原始日志不重写；该机制不能保证发现任意编码、分段或未知格式的凭据，脱敏摘要也不自动成为可公开资料。
 
 ## 执行边界
 
@@ -93,3 +99,14 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 - 独立结果为 83 passed、1 skipped；跳过项依赖未复制的私有群聊回放数据。
 - 补丁 209 字节，`git apply --check` 通过；任务前后集成、源仓和生产仓的 Git 状态指纹相同。
 - 没有将试验补丁应用到源码或生产。完整 QQ 教学和自动发布仍属阶段 3/4。
+
+### 审阅后修复与加强验收
+
+- 修复静默命令可能被提前结束的问题；实际无输出期限覆盖 bash 上限，并留 30 秒事件返回余量，总墙钟期限不变。
+- 新增统一结果脱敏，覆盖 CLI、错误、模型事件摘要和完成/恢复快照；原始任务和日志仍私有保留。
+- 第一次加强验收 `20261020T032825Z-b64919d2d8a9` 已完成代码修复及独立测试（85 passed/1 skipped），但依赖安装因 DSH 内层把任务 venv 视为工作区外而失败；不能将该次任务状态 succeeded 当作依赖安装验收通过。
+- 补充工作区内的任务 venv 挂载后，真实任务 `20261020T033146Z-db2418ff6917` 完成已有工作流加载代码修改与测试补充：先实际观察 4 个测试失败，修复后 worker 独立复测 87 passed/1 skipped。
+- `packaging==24.2` 成功安装到该任务 venv；另在断网环境独立验证版本、导入路径及 pip 脚本入口。基础 venv 保持只读。
+- 候选补丁 4294 字节，只改工作流加载器和对应测试；`git apply --check` 通过，集成、源仓及生产仓状态指纹保持一致，补丁未应用。
+- 当前 WSL worker 回归 25 项通过；Windows 根测试运行 38 项，34 项通过、4 项 Linux 专用测试跳过。另覆盖仅远端跟踪引用持有的提交克隆、凭据跨截断边界、恢复快照脱敏及任务 venv 写入边界。
+- 以上不代表 QQ 教学派发或自动发布已接入；取消和超时仍由自动化进程/命名空间测试验收，未新增真实模型取消演练。

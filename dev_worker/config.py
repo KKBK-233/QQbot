@@ -83,6 +83,11 @@ class WorkerConfig:
     # ----- 派生路径 -----
 
     @property
+    def effective_agent_idle_timeout_sec(self) -> int:
+        """静默工具至少有完整的执行期限，另留 30 秒传递结束事件。"""
+        return max(self.agent_idle_timeout_sec, (self.bash_timeout_ms + 999) // 1000 + 30)
+
+    @property
     def dsh_root(self) -> Path:
         """dsh 的 npm 安装目录。"""
         return self.root / "dsh"
