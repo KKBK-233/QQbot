@@ -25,6 +25,9 @@ DEFAULT_ALLOWED_REQUESTERS = ("1020050112",)
 # 否则会命中 /mnt/c 上的旧版 dsh。
 DEFAULT_AGENT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DEFAULT_PIP_INDEX = "https://mirrors.aliyun.com/pypi/simple"
+# 工作流候选通过测试后自动发布到这里；设为 off 关闭自动发布。
+DEFAULT_LIVE_WORKFLOWS = "/home/qqbot/QQbot/MaiBot/workflows"
+DEFAULT_LIVE_LOADER = "/home/qqbot/QQbot/MaiBot/src/kkbk_engine/workflows.py"
 
 # 环境变量前缀
 ENV_PREFIX = "KKBK_DEV_WORKER_"
@@ -41,6 +44,11 @@ def _env_int(environ: dict[str, str], name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{ENV_PREFIX + name} 必须为正整数：{value}")
     return value
+
+
+def _env_path(environ: dict[str, str], name: str, default: str) -> Path | None:
+    raw = environ.get(ENV_PREFIX + name, default)
+    return None if raw.strip().lower() == "off" else Path(raw)
 
 
 def _env_bool(environ: dict[str, str], name: str, default: bool) -> bool:
@@ -79,8 +87,24 @@ class WorkerConfig:
     max_log_bytes: int = 8 * 1024 * 1024
     max_patch_bytes: int = 4 * 1024 * 1024
     agent_idle_timeout_sec: int = 300
+    # 线上工作流目录与加载器；为 None 时不同步线上基线，也不自动发布。
+    live_workflows: Path | None = None
+    live_loader: Path | None = None
 
     # ----- 派生路径 -----
+
+    @property
+    def auto_release(self) -> bool:
+        return self.live_workflows is not None and self.live_loader is not None
+
+    @property
+    def releases_dir(self) -> Path:
+        """自动发布记录，与维护者部署脚本的 releases/ 分开。"""
+        return self.root / "workflow-releases"
+
+    @property
+    def release_lock_path(self) -> Path:
+        return self.root / "release.lock"
 
     @property
     def effective_agent_idle_timeout_sec(self) -> int:
@@ -167,6 +191,8 @@ class WorkerConfig:
             max_log_bytes=_env_int(env, "MAX_LOG_BYTES", 8 * 1024 * 1024),
             max_patch_bytes=_env_int(env, "MAX_PATCH_BYTES", 4 * 1024 * 1024),
             agent_idle_timeout_sec=_env_int(env, "AGENT_IDLE_TIMEOUT", 300),
+            live_workflows=_env_path(env, "LIVE_WORKFLOWS", DEFAULT_LIVE_WORKFLOWS),
+            live_loader=_env_path(env, "LIVE_LOADER", DEFAULT_LIVE_LOADER),
         )
 
     def is_allowed(self, requester: str) -> bool:

@@ -27,7 +27,8 @@ async def main():
     context=ToolAvailabilityContext(platform='qq',is_group_chat=True,group_id='1022382380',
                                     session_id='offline-development',user_id='1020050112')
     specs=await provider.list_tools(context)
-    assert {spec.name for spec in specs}=={'learn_teaching','development_submit','development_status','development_cancel'}
+    assert {spec.name for spec in specs}=={'learn_teaching','development_submit','development_status',
+                                           'development_cancel','development_rollback'}
     context.user_id='not-admin'; assert await provider.list_tools(context)==[]
     anchor=SimpleNamespace(message_id='fixture',message_info=SimpleNamespace(user_info=SimpleNamespace(user_id='1020050112')),
                            raw_message=SimpleNamespace(components=[TextComponent(text='以后搜索优先官方原文')]))
@@ -45,7 +46,7 @@ async def main():
     if not args.stage:
         response=await DevelopmentClient().request('notifications',payload={'session_id':'offline-development-no-delivery'})
         assert response is None
-    print(json.dumps({'admin_tools':4,'non_admin_tools':0,'source_bound':True,
+    print(json.dumps({'admin_tools':5,'non_admin_tools':0,'source_bound':True,
                       'model_origin_rejected':True,'real_socket_checked':not args.stage}))
 
 

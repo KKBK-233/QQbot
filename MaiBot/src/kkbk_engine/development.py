@@ -42,7 +42,8 @@ class DevelopmentToolProvider:
             'development_submit':('管理员的教学需要改工作流执行或源码/插件时，提交异步开发候选。'
                 '由你判断需要的作用范围，不要求原话出现“以后”或“开发”等口令。'
                 '仅本次的指导使用普通任务工具，不提交开发。scope=持久工作流或代码修改；'
-                '只排队，不发布；同一原始消息重复调用返回同一任务。',{
+                '持久工作流候选通过测试后由宿主自动发布，代码修改只保留候选；'
+                '同一原始消息重复调用返回同一任务。',{
                 'scope':{'type':'string','enum':['persistent_workflow','code_change']},
                 'instructions':{'type':'string','maxLength':8192},
                 'acceptance':{'type':'string','maxLength':4096}},['scope','instructions','acceptance']),
@@ -50,6 +51,8 @@ class DevelopmentToolProvider:
                 'task_id':{'type':'string'}},[]),
             'development_cancel':('取消当前管理员在当前群的指定开发任务，已完成的任务不回滚。',{
                 'task_id':{'type':'string'}},['task_id']),
+            'development_rollback':('管理员明确要求撤销最近一次自动发布的工作流时调用，恢复发布前的线上版本；'
+                '发布之后线上又有改动时宿主会拒绝。',{},[]),
         }
         return [ToolSpec(name=name,description=description,provider_name=self.provider_name,
                     provider_type=self.provider_type,parameters_schema={'type':'object','properties':properties,
@@ -63,7 +66,8 @@ class DevelopmentToolProvider:
             args=invocation.arguments
             allowed={'learn_teaching':{'summary','keywords','source_message_ids'},
                      'development_submit':{'scope','instructions','acceptance'},
-                     'development_status':{'task_id'},'development_cancel':{'task_id'}}
+                     'development_status':{'task_id'},'development_cancel':{'task_id'},
+                     'development_rollback':set()}
             if invocation.tool_name not in allowed or set(args)-allowed[invocation.tool_name]:
                 raise ValueError('开发工具参数包含未开放字段')
             if invocation.tool_name=='learn_teaching':
@@ -72,7 +76,7 @@ class DevelopmentToolProvider:
                     content=json.dumps(result,ensure_ascii=False),structured_content=result,
                     metadata={'teaching_receipt':result['reply']})
             operation={'development_submit':'submit','development_status':'status',
-                       'development_cancel':'cancel'}[invocation.tool_name]
+                       'development_cancel':'cancel','development_rollback':'rollback'}[invocation.tool_name]
             if operation=='status' and not args.get('task_id'): operation='list'
             result=await self.client.request(operation,origin=origin,payload=args)
             return ToolExecutionResult(tool_name=invocation.tool_name,success=True,

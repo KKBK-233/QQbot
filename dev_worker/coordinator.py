@@ -2,6 +2,8 @@
 import hashlib
 import json
 
+from . import release
+
 ALLOWED_GROUPS=frozenset({'1022382380','894179464','427204073'})
 
 
@@ -33,12 +35,15 @@ class Coordinator:
         patch=({'files':[name[:256] for name in names[:20]],'file_count':len(names),
                 'sha256':raw_patch.get('sha256'),'bytes':raw_patch.get('bytes')}
                if raw_patch else {})
+        # 只有工作流候选会自动发布；release 为空表示未尝试发布。
+        published=result.get('release') or None
         return self.worker.redactor.value({
             'id':task['id'],'status':task['status'],'phase':task['phase'],'reason':task['reason'],
             'cancel_requested':task['cancel_requested'],'scope':task['spec'].get('scope','code_change'),
-            'base_commit':task['spec']['base_commit'],'candidate_only':True,
+            'base_commit':task['spec']['base_commit'],
+            'candidate_only':not (published and published['state']=='installed'),
             'candidate_discarded':bool(result.get('candidate_discarded')),
-            'test_exit':result.get('test_exit'),'patch':patch,
+            'test_exit':result.get('test_exit'),'patch':patch,'release':published,
             'error':result.get('error',''),'delivery':self.store.notification_state(task['id'])})
 
     def owned(self, task_id, origin):
@@ -56,10 +61,13 @@ class Coordinator:
         instructions=text(payload.get('instructions'),'需求')
         acceptance=text(payload.get('acceptance'),'验收条件',4096)
         request_key=hashlib.sha256(json.dumps([origin[key] for key in ('platform','session_id','message_id')]).encode()).hexdigest()
-        prompt=('这是宿主验证过的管理员开发需求。只生成候选补丁与测试证据，不发布。\n'
+        prompt=('这是宿主验证过的管理员开发需求。只生成候选补丁与测试证据，自己不部署。\n'
                 +'作用范围：'+scope+'\n原始教学：'+raw+'\n协调需求：'+instructions+'\n验收条件：'+acceptance)
         if scope=='persistent_workflow':
-            prompt+='\n只允许修改 workflows/ 与 pytests/kkbk_engine/。生成新版本并更新启用清单，验证加载及快照行为。'
+            # 工作副本的 workflows/ 已同步为线上当前版本，通过测试后由宿主自动发布。
+            prompt+=('\n只允许修改 workflows/ 与 pytests/kkbk_engine/。workflows/ 已是线上当前版本，'
+                     '在此基础上生成新版本并更新启用清单，验证加载及快照行为。'
+                     '不要删除工作流文件；测试通过后宿主会自动发布 workflows/ 下的改动。')
         task=self.worker.submit(origin['user_id'],prompt,request_key=request_key,origin=origin,scope=scope)
         return self.project(task)
 
@@ -90,4 +98,7 @@ class Coordinator:
             task=self.owned(payload.get('task_id'),origin)
             if operation=='cancel': task=self.store.cancel(task['id'])
             return self.project(task)
+        if operation=='rollback':
+            # 回退最近一次仍生效的自动发布；线上之后被改过时由 release 拒绝。
+            return self.worker.redactor.value(release.rollback(self.worker.config))
         raise ValueError('不支持的控制操作')

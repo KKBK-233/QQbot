@@ -2,7 +2,7 @@
 
 将本地维护者提交的开发任务变成独立源码副本、真实开发代理执行、补丁及独立测试结果。当前使用已有的 DeepSeek 官方 DSH `0.2.1-rc.2`，没有改用 Codex 或 Claude 后端。
 
-当前支持本机 CLI/worker 及阶段 3 的 Unix socket 协调入口；QQ 宿主绑定实际发送者后可提交、查询和取消开发任务。不监听 HTTP，不部署生成代码。阶段 4 再接发布与恢复。群内用法和回执边界见 `docs/kkbk-engine/development-coordination.md`。
+当前支持本机 CLI/worker 及阶段 3 的 Unix socket 协调入口；QQ 宿主绑定实际发送者后可提交、查询和取消开发任务。不监听 HTTP，不部署生成代码；阶段 4 起，持久工作流候选通过测试后自动发布到线上 `workflows/`，带备份、加载自检、自动恢复和回退（`release.py`）。群内用法和回执边界见 `docs/kkbk-engine/development-coordination.md`。
 
 ## 前提
 
@@ -61,6 +61,7 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 | `MAX_LOG_BYTES` / `MAX_PATCH_BYTES` | 每阶段输出合计 8 MiB / 补丁 4 MiB |
 | `PIP_INDEX` | 阿里云 PyPI 镜像，可由维护者更改 |
 | `SANDBOX` | 默认 true；真实 CLI run 不接受关闭隔离 |
+| `LIVE_WORKFLOWS` / `LIVE_LOADER` | `/home/qqbot/QQbot/MaiBot/workflows` / 同仓 `src/kkbk_engine/workflows.py`；任一设为 `off` 关闭工作流自动发布 |
 
 当前每项任务针对一个完整的已提交 Git 仓。默认是 MaiBot；选择根集成仓或独立插件仓时，需要同时配置对应测试命令。尚未自动组合多个嵌套仓，也不复制任何未提交补丁。因此工作副本不是生产实例的逐字镜像。
 
@@ -92,7 +93,7 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 - 代理可联网以访问模型和安装依赖；这是共享主机网络，不是出站域名防火墙。独立复测和 Git 补丁收集使用断网命名空间，不挂载 DSH 凭据。
 - Git add/diff 也在隔离环境运行，避免代理修改的 Git 过滤器在宿主执行。补丁包含未忽略的新增文件，已有提交也按固定基准比较。
 - 进程使用独立进程组；取消/超时终止组，Bubblewrap 的 PID 命名空间和父进程退出行为负责清理内部子孙进程。
-- 不自动应用补丁，不调用生产管理接口，不重启服务，不发送 QQ 消息。文件隔离与 WSL 共用内核，不是虚拟机。
+- 源码补丁不自动应用；工作流候选只由宿主侧 worker（不在代理沙箱内）写入线上 `workflows/`。不调用生产管理接口，不重启服务，不发送 QQ 消息。文件隔离与 WSL 共用内核，不是虚拟机。
 
 ## 验证记录
 

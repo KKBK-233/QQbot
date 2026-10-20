@@ -1,10 +1,11 @@
-"""阶段二本地开发执行器：固定提交、独立验证、产物，不自动发布。"""
+"""本地开发执行器：固定提交、独立验证、产物；工作流候选通过测试后自动发布。"""
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 import json
 import time
 
+from . import release
 from .config import WorkerConfig
 from .process import Stopped, run_process
 from .redaction import Redactor
@@ -67,7 +68,7 @@ class Worker:
                                   'origin':origin or {},'scope':scope},request_key=request_key)
 
     def run_once(self):
-        """持锁恢复中断状态，再原子领取一项；没有自动重试或发布。"""
+        """持锁恢复中断状态，再原子领取一项；不自动重试。"""
         with exclusive_lock(self.config.lock_path):
             self.store.recover(project=self.redactor.value)
             task=self.store.claim()
@@ -95,6 +96,13 @@ class Worker:
                 self.store.phase(task_id,phase)
                 before=time.monotonic(); operation()
                 result['durations'][phase]=round(time.monotonic()-before,3)
+            # 工作流候选以线上当前工作流为基线，补丁只含代理在此之上的改动。
+            base=task['spec']['base_commit']
+            publishing=task['spec'].get('scope')=='persistent_workflow' and cfg.auto_release
+            if publishing:
+                self.store.phase(task_id,'sync')
+                baseline,base=release.sync_workspace(cfg,folder,cancelled)
+                result['workflow_base_commit']=base
             self.store.phase(task_id,'agent')
             response=run_process(agent_command(cfg,folder,task['spec']['task']),cwd=folder/'ws',
                 env=agent_env(cfg,folder),stdout=folder/'events.jsonl',stderr=folder/'stderr.log',
@@ -104,7 +112,7 @@ class Worker:
             result['durations']['agent']=round(response.seconds,3)
             result['events']=event_summary(folder/'events.jsonl',self.redactor)
             self.store.phase(task_id,'collect')
-            patch=collect_patch(cfg,folder,task['spec']['base_commit'],cancelled)
+            patch=collect_patch(cfg,folder,base,cancelled)
             result['patch']=patch
             if task['spec'].get('scope')=='persistent_workflow' and any(
                     not name.startswith(('workflows/','pytests/kkbk_engine/')) for name in patch['files']):
@@ -118,11 +126,16 @@ class Worker:
                 result['test_exit']=response.exit_code
                 result['durations']['test']=round(response.seconds,3)
                 # 测试产生的实际源码变化也必须披露，不能把测试前补丁当作最终版本。
-                after=collect_patch(cfg,folder,task['spec']['base_commit'],cancelled)
+                after=collect_patch(cfg,folder,base,cancelled)
                 result['patch']=after
                 if after['sha256']!=patch['sha256']:
                     raise RuntimeError('workspace_changed_during_tests')
             status,reason=outcome(result['agent_exit'],patch['bytes'],result['test_exit'],result['events'])
+            # 发布结果单独记录：候选本身已验证，发布失败不改写任务结论。
+            if publishing and status=='succeeded':
+                self.store.phase(task_id,'release')
+                result['release']=release.publish(cfg,task_id=task_id,workspace=folder/'ws',
+                                                  files=result['patch']['files'],baseline=baseline)
         except Stopped as exc:
             reason=exc.reason
             status='cancelled' if reason in ('cancelled','worker_stopped') else 'timeout' if reason=='timeout' else 'failed'

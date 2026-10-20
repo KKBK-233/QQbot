@@ -28,6 +28,21 @@ def test_completion_is_candidate_only_and_contains_no_agent_final():
     assert 'private reasoning' not in text
 
 
+def test_completion_reports_release_outcome():
+    task={'id':'fixture','status':'succeeded','reason':'verified_patch','test_exit':0,
+          'patch':{'files':['workflows/enabled.json'],'bytes':10}}
+    installed=completion_text({**task,'release':{'state':'installed','release_id':'r1',
+        'workflows':['conservative-web-research@1.1.0'],'error':'','restore_error':''}})
+    assert '已自动发布：conservative-web-research@1.1.0' in installed and 'r1' in installed
+    assert '尚未发布' not in installed
+    rolled=completion_text({**task,'release':{'state':'rolled_back','release_id':'r2','workflows':[],
+        'error':'ReleaseError: 线上加载结果与候选不一致','restore_error':''}})
+    assert '自动恢复原版本' in rolled and '不一致' in rolled
+    failed=completion_text({**task,'release':{'state':'failed','release_id':'r3','workflows':[],
+        'error':'ReleaseError: 线上工作流在候选生成后已变化','restore_error':''}})
+    assert '未发布：' in failed
+
+
 @pytest.mark.skipif(__import__('sys').platform!='linux',reason='需要 Unix socket')
 def test_client_sends_source_outside_model_payload_and_reports_errors(tmp_path):
     async def scenario():

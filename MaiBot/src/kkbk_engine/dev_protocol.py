@@ -52,5 +52,17 @@ def completion_text(task):
         lines.append('改动：'+'、'.join(patch['files'][:6]))
         lines.append(f"补丁 {patch.get('bytes',0)} 字节；独立测试退出码 {task.get('test_exit')}。")
     if task.get('reason') not in (None,'verified_patch'): lines.append('原因：'+str(task['reason']))
-    lines.append('结果保留在开发工作副本，尚未发布。')
+    # 工作流候选会自动发布；其余候选只留在开发工作副本。
+    published=task.get('release')
+    if not published:
+        lines.append('结果保留在开发工作副本，尚未发布。')
+    elif published['state']=='installed':
+        lines.append('已自动发布：'+'、'.join(published['workflows'][:6])+f"（发布记录 {published['release_id']}）。")
+        lines.append('新任务使用新版本；如需撤销可让我回退最近一次发布。')
+    elif published['state']=='rolled_back':
+        lines.append('发布自检失败，线上已自动恢复原版本：'+published['error'][:300])
+    elif published['state']=='restore_failed':
+        lines.append('发布自检失败且自动恢复失败，需要人工检查：'+published['restore_error'][:300])
+    else:
+        lines.append('未发布：'+published['error'][:300])
     return '\n'.join(lines)[:1400]
