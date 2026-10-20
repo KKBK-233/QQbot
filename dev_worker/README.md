@@ -2,7 +2,7 @@
 
 将本地维护者提交的开发任务变成独立源码副本、真实开发代理执行、补丁及独立测试结果。当前使用已有的 DeepSeek 官方 DSH `0.2.1-rc.2`，没有改用 Codex 或 Claude 后端。
 
-当前是本机 CLI/worker，不监听 HTTP，不注册 QQ 工具，不部署生成代码。阶段 3 再接真实 QQ 身份和任务派发，阶段 4 再接发布与恢复。
+当前支持本机 CLI/worker 及阶段 3 的 Unix socket 协调入口；QQ 宿主绑定实际发送者后可提交、查询和取消开发任务。不监听 HTTP，不部署生成代码。阶段 4 再接发布与恢复。群内用法和回执边界见 `docs/kkbk-engine/development-coordination.md`。
 
 ## 前提
 
@@ -26,6 +26,9 @@ wsl -d Ubuntu -u qqbot -- env PYTHONPATH=/mnt/d/code/web/QQbot python3 -B -m dev
 
 # 执行最早的一项任务，或用 --loop 持续轮询。
 wsl -d Ubuntu -u qqbot -- env PYTHONPATH=/mnt/d/code/web/QQbot python3 -B -m dev_worker run --once
+
+# 常驻协调服务（真实运行由 Supervisor dev-worker 管理）。
+wsl -d Ubuntu -u qqbot -- env PYTHONPATH=/mnt/d/code/web/QQbot python3 -B -m dev_worker serve
 
 # 省略编号列出最近任务；指定编号查看状态和结果。
 wsl -d Ubuntu -u qqbot -- env PYTHONPATH=/mnt/d/code/web/QQbot python3 -B -m dev_worker status
@@ -98,7 +101,7 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 - DSH 真实调用 bash/write，在副本中只新增 `docs/dev-worker-smoke.md`；代理退出 0，worker 独立复测退出 0。
 - 独立结果为 83 passed、1 skipped；跳过项依赖未复制的私有群聊回放数据。
 - 补丁 209 字节，`git apply --check` 通过；任务前后集成、源仓和生产仓的 Git 状态指纹相同。
-- 没有将试验补丁应用到源码或生产。完整 QQ 教学和自动发布仍属阶段 3/4。
+- 没有将试验补丁应用到源码或生产。当时 QQ 教学和自动发布尚未接通；当前阶段 3 进度另见开发协调文档。
 
 ### 审阅后修复与加强验收
 
@@ -110,3 +113,10 @@ CLI 输出 JSON；`run --once` 的任务失败/超时/取消返回退出码 2，
 - 候选补丁 4294 字节，只改工作流加载器和对应测试；`git apply --check` 通过，集成、源仓及生产仓状态指纹保持一致，补丁未应用。
 - 当前 WSL worker 回归 25 项通过；Windows 根测试运行 38 项，34 项通过、4 项 Linux 专用测试跳过。另覆盖仅远端跟踪引用持有的提交克隆、凭据跨截断边界、恢复快照脱敏及任务 venv 写入边界。
 - 以上不代表 QQ 教学派发或自动发布已接入；取消和超时仍由自动化进程/命名空间测试验收，未新增真实模型取消演练。
+
+### 阶段 3 协调入口验收
+
+- 管理员实际来源绑定、持久教学范围、并发重复提交去重、跨会话拒绝、取消、重启恢复、通知去重及确认协议均有回归。
+- WSL 开发执行及协调测试共 38 项通过；Windows 根测试 51 项，46 项通过、5 项 Linux 专用测试跳过；当前源码引擎测试 87 项通过。
+- 真实 QQ 教学任务产出工作流候选与测试，独立复测 88 passed/1 skipped，取得真实发送回执。实测修正的范围与确认接线问题见 harness-plan.md。
+- 该规则仅用于验收，候选和补丁已按用户要求清理，相关单条测试记忆通过原生接口撤回；现行工作流版本保持 1.0.0，任务查询显示候选已废弃。

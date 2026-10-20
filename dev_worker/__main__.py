@@ -31,11 +31,16 @@ def main(argv=None):
     status=commands.add_parser('status'); status.add_argument('task_id',nargs='?')
     cancel=commands.add_parser('cancel'); cancel.add_argument('task_id')
     setup=commands.add_parser('setup'); setup.add_argument('--full',action='store_true')
+    commands.add_parser('serve')
     try:
         args=parser.parse_args(argv)
         config=WorkerConfig.from_env()
         redactor=Redactor.from_env_file(config.dsh_home/'.env')
         worker=Worker(config)
+        if args.command=='serve':
+            from .service import main as serve
+            serve(config)
+            return 0
         if args.command=='submit':
             raw=args.task_file.read_bytes()
             if len(raw)>65536: raise ValueError('任务文件超过 64 KiB')

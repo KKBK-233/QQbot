@@ -9,7 +9,7 @@ QQ / SnowLuma 提供平台接入，MaiBot 提供消息、存储、模型、记�
 - 轻层与任务层已接入三个指定群，保留 3 秒防抖、80 条历史和原生工具调用。
 - 生图、搜索、按需识图三个业务插件保留；现有长期记忆保持原状。
 - 生图请求采用Sunburst / medium；10月19日high试验成图后，按管理员最新要求恢复medium。[试验与恢复记录](docs/image-sunburst-high-20261019.md)。
-- 版本化工作流已实现并测试，尚未部署；独立开发 worker 已接通真实 DSH，QQ 教学派发与发布器尚未实现。
+- 版本化工作流已部署并通过真实搜索验收；独立开发 worker 已接通真实 DSH，QQ 管理员可提交、查询和取消开发任务，候选版本尚不自动发布。
 - 离线 Python 沙箱已下架，其源码及专用安装/部署/测试代码已删除。历史实现可从 Git 恢复。
 - 其他精简候选仅盘点，没有批量关闭。
 
@@ -20,6 +20,7 @@ QQ / SnowLuma 提供平台接入，MaiBot 提供消息、存储、模型、记�
 - [引擎接入说明](docs/kkbk-engine/README.md)
 - [脚本目录与使用范围](scripts/README.md)
 - [独立开发 worker：用法与验收](dev_worker/README.md)
+- [QQ 教学与开发任务协调](docs/kkbk-engine/development-coordination.md)
 - [本轮目录整理说明](docs/kkbk-engine/repository-layout.md)（历史个案仅保留本地）
 - [公开源码仓库](https://github.com/KKBK-233/QQbot)
 

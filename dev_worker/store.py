@@ -62,6 +62,11 @@ class Store:
                 phase TEXT NOT NULL, cancel_requested INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, reason TEXT,
                 result TEXT NOT NULL DEFAULT '{}')''')
+            db.execute('CREATE TABLE IF NOT EXISTS task_requests (request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE)')
+            db.execute('''CREATE TABLE IF NOT EXISTS notifications (
+                id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending', claim_token TEXT, receipt TEXT,
+                created_at TEXT NOT NULL, sent_at TEXT)''')
 
     @contextmanager
     def connect(self):
@@ -82,14 +87,24 @@ class Store:
             raise ValueError('任务目录越界')
         return target
 
-    def submit(self, spec):
+    def submit(self, spec, request_key=None):
         task_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-')+uuid.uuid4().hex[:12]
         folder = self.directory(task_id)
-        folder.mkdir(parents=True, mode=0o700)
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if request_key:
+                existing=db.execute('SELECT task_id FROM task_requests WHERE request_key=?',(request_key,)).fetchone()
+                if existing: return self.get(existing['task_id'])
+            folder.mkdir(parents=True, mode=0o700)
             db.execute('INSERT INTO tasks(id,spec,status,phase,created_at) VALUES(?,?,?,?,?)',
                        (task_id, json.dumps(spec, ensure_ascii=False), 'queued', 'queued', now()))
+            if request_key: db.execute('INSERT INTO task_requests VALUES(?,?)',(request_key,task_id))
         return self.get(task_id)
+
+    def get_request(self, request_key):
+        with self.connect() as db:
+            row=db.execute('SELECT task_id FROM task_requests WHERE request_key=?',(request_key,)).fetchone()
+        return self.get(row['task_id']) if row else None
 
     def get(self, task_id):
         self.directory(task_id)
@@ -152,3 +167,40 @@ class Store:
             self.finish(row['id'],'failed','worker_interrupted')
             atomic_json(self.directory(row['id'])/'summary.json',project(self.get(row['id'])))
         return len(rows)
+
+    def queue_notifications(self):
+        """终态回执使用持久 outbox；不为本地 CLI 任务生成群通知。"""
+        with self.connect() as db:
+            rows=db.execute("SELECT id,spec FROM tasks WHERE status IN ('succeeded','failed','timeout','cancelled') AND id NOT IN (SELECT task_id FROM notifications)").fetchall()
+            for row in rows:
+                origin=json.loads(row['spec']).get('origin',{})
+                if not origin.get('session_id'): continue
+                db.execute('INSERT OR IGNORE INTO notifications(id,task_id,session_id,created_at) VALUES(?,?,?,?)',
+                           (uuid.uuid4().hex,row['id'],origin['session_id'],now()))
+
+    def take_notification(self, session_id):
+        """先标记发送中再交付；发送结果不确定时不自动重发。"""
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute("SELECT * FROM notifications WHERE session_id=? AND state='pending' ORDER BY created_at,id LIMIT 1",(session_id,)).fetchone()
+            if row is None: return None
+            token=uuid.uuid4().hex
+            db.execute("UPDATE notifications SET state='sending',claim_token=? WHERE id=?",(token,row['id']))
+        return {**dict(row),'state':'sending','claim_token':token}
+
+    def acknowledge_notification(self, session_id, notification_id, token, receipt):
+        """真实发送回执单独入库；重试同一确认不会再次发消息。"""
+        if not isinstance(receipt,str) or not receipt or len(receipt)>256: raise ValueError('缺少真实发送回执')
+        with self.connect() as db:
+            row=db.execute('SELECT * FROM notifications WHERE id=? AND session_id=? AND claim_token=?',
+                           (notification_id,session_id,token)).fetchone()
+            if row is None: raise PermissionError('通知确认来源不符')
+            if row['state']=='sent': return True
+            db.execute("UPDATE notifications SET state='sent',receipt=?,sent_at=? WHERE id=?",
+                       (receipt,now(),notification_id))
+        return True
+
+    def notification_state(self, task_id):
+        with self.connect() as db:
+            row=db.execute('SELECT state,receipt FROM notifications WHERE task_id=?',(task_id,)).fetchone()
+        return dict(row) if row else None

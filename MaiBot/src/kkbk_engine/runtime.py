@@ -29,6 +29,8 @@ from src.maisaka.context.clear_context import select_messages_after_latest_clear
 
 from .actions import ActionError, ModelAction, ValidationContext, parse_action, validate_action
 from .builtin_tools import KKBKBuiltinToolProvider
+from .development import DevelopmentToolProvider
+from .dev_protocol import completion_text
 from .config import EngineConfig
 from .gate import LookOutcome, SessionGate
 from .guards import CircuitBreaker, ConcurrencyGate, QueueFullError, QueueTimeoutError, SlidingWindowLimiter
@@ -96,6 +98,9 @@ class KKBKHeartFlowChatting:
         self._registry = ToolRegistry()
         self._registry.register_provider(KKBKBuiltinToolProvider(self))
         self._registry.register_provider(PluginToolProvider())
+        self._development = DevelopmentToolProvider(self)
+        self._registry.register_provider(self._development)
+        self._development_task = None
         self._llm = LLMServiceClient("planner", request_type="kkbk.light", session_id=session_id)
         self._tool_llm = LLMServiceClient("planner", request_type="kkbk.tools", session_id=session_id)
 
@@ -107,11 +112,16 @@ class KKBKHeartFlowChatting:
             self._append(message, observe=False)
         self._running = True
         self._task = asyncio.create_task(self._run(), name=f"kkbk:{self.session_id}")
+        self._development_task = asyncio.create_task(self._development_notifications(), name=f"kkbk-dev:{self.session_id}")
         logger.info(f"{self.log_prefix} 新引擎启动：历史={len(self.history)} 防抖=3s 模型任务=planner")
 
     async def stop(self):
         """正常取消本会话循环；插件和 QQ 登录仍由宿主管理。"""
         self._running = False
+        if self._development_task is not None:
+            self._development_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._development_task
         if self._task is not None:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
@@ -213,6 +223,9 @@ class KKBKHeartFlowChatting:
         )
         system += ("\n需要查询或保存长期记忆、了解群友时也选 escalate。可用工具："
                    + "、".join(spec.name for spec in specs))
+        if any(spec.name=='development_submit' for spec in specs):
+            system += ("\n当前管理员明确要求以后长期改进流程，或修改源码/插件时选 escalate，调用开发工具。"
+                       "仅这次的操作照常完成。开发工具返回排队编号才算已提交；候选验证通过不表示已上线。")
         hook_items = []
         for message in list(self.messages.values()):
             user = message.message_info.user_info
@@ -387,6 +400,27 @@ class KKBKHeartFlowChatting:
         if message is None:
             raise RuntimeError("发送没有成功回执，本次不自动重发")
         logger.info(f"{self.log_prefix} 新引擎发送成功 message_id={message.message_id}")
+        return message
+
+    async def _development_notifications(self):
+        """持久回执领取后只发送一次；发送或确认不确定时留给状态查询，不盲重发。"""
+        last_warning = 0.0
+        while self._running:
+            try:
+                item = await self._development.client.request('notifications',payload={'session_id':self.session_id})
+                if item is not None:
+                    message = await self._send(ModelAction(action='reply',track='leave',
+                                                text=completion_text(item['task'])),None)
+                    await self._development.client.request('acknowledge',payload={
+                        'session_id':self.session_id,'id':item['id'],
+                        'delivery_nonce':item['delivery_nonce'],'receipt':str(message.message_id)})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if time.time()-last_warning>60:
+                    logger.warning(f"{self.log_prefix} 开发服务或回执暂不可用：{type(exc).__name__}")
+                    last_warning=time.time()
+            await asyncio.sleep(3)
 
     async def _after_turn(self, look, success):
         """清理任务插件临时状态，失败清理不掩盖原始错误。"""

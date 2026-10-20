@@ -44,22 +44,27 @@ def outcome(agent_exit,patch_bytes,test_exit,events):
     return 'succeeded','verified_patch'
 
 class Worker:
-    def __init__(self,config: WorkerConfig):
+    def __init__(self,config: WorkerConfig,stop_requested=lambda:False):
         config.validate()
         self.config=config
         self.store=Store(config.root)
         self.redactor=Redactor.from_env_file(config.dsh_home/'.env')
+        self.stop_requested=stop_requested
 
-    def submit(self,requester,task,base_ref=None):
+    def submit(self,requester,task,base_ref=None,*,request_key=None,origin=None,scope='code_change'):
         # 这里只是本地操作员 CLI 的白名单；远程身份认证在阶段三接入。
         if not self.config.is_allowed(requester): raise PermissionError('请求者不在开发管理员名单')
         if not isinstance(task,str) or not task.strip() or len(task.encode('utf-8'))>65536:
             raise ValueError('任务必须为非空文本且不超过 64 KiB')
+        if request_key:
+            existing=self.store.get_request(request_key)
+            if existing: return existing
         ref=base_ref or self.config.base_ref
         commit=resolve_commit(self.config,ref)
         return self.store.submit({'requester':requester,'task':task,'base_ref':ref,
                                   'base_commit':commit,'test_command':self.config.test_command,
-                                  'source_repo':str(self.config.source_repo.resolve())})
+                                  'source_repo':str(self.config.source_repo.resolve()),
+                                  'origin':origin or {},'scope':scope},request_key=request_key)
 
     def run_once(self):
         """持锁恢复中断状态，再原子领取一项；没有自动重试或发布。"""
@@ -77,7 +82,9 @@ class Worker:
         result={'base_commit':task['spec']['base_commit'],'agent_exit':None,'test_exit':None,
                 'patch':None,'events':{},'durations':{},'artifacts':{}}
         status,reason='failed','worker_error'
-        cancelled=lambda:self.store.get(task_id)['cancel_requested']
+        def cancelled():
+            if self.stop_requested(): raise Stopped('worker_stopped')
+            return self.store.get(task_id)['cancel_requested']
         interrupted=False
         try:
             if str(cfg.source_repo.resolve())!=task['spec']['source_repo']:
@@ -99,6 +106,9 @@ class Worker:
             self.store.phase(task_id,'collect')
             patch=collect_patch(cfg,folder,task['spec']['base_commit'],cancelled)
             result['patch']=patch
+            if task['spec'].get('scope')=='persistent_workflow' and any(
+                    not name.startswith(('workflows/','pytests/kkbk_engine/')) for name in patch['files']):
+                raise RuntimeError('workflow_scope_violation')
             if patch['bytes']:
                 self.store.phase(task_id,'test')
                 test_cfg=replace(cfg,test_command=task['spec']['test_command'])
@@ -115,7 +125,7 @@ class Worker:
             status,reason=outcome(result['agent_exit'],patch['bytes'],result['test_exit'],result['events'])
         except Stopped as exc:
             reason=exc.reason
-            status='cancelled' if reason=='cancelled' else 'timeout' if reason=='timeout' else 'failed'
+            status='cancelled' if reason in ('cancelled','worker_stopped') else 'timeout' if reason=='timeout' else 'failed'
         except KeyboardInterrupt:
             status,reason,interrupted='cancelled','worker_stopped',True
         except Exception as exc:

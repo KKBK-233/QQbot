@@ -6,10 +6,13 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
+import threading
 
 from .process import run_process
 
 TASK_VENV_MOUNT = '.dev-worker-venv'
+_GIT_CONFIG_LOCK = threading.Lock()
 
 
 def visible_venv(config, folder):
@@ -24,7 +27,15 @@ def host_env(config):
     text='[user]\n name = kkbk-dev-worker\n email = worker@localhost\n[safe]\n'
     for path in (config.source_repo.resolve(),config.source_repo.resolve()/'.git'):
         text+=' directory = '+json.dumps(str(path))+'\n'
-    config.gitconfig_path.write_text(text,encoding='utf-8')
+    # 多个控制请求可并发解析提交，不能在 Git 读取时截断共用配置。
+    with _GIT_CONFIG_LOCK:
+        if not config.gitconfig_path.exists() or config.gitconfig_path.read_text(encoding='utf-8')!=text:
+            fd,temporary=tempfile.mkstemp(prefix='.gitconfig-',dir=config.root)
+            try:
+                with os.fdopen(fd,'w',encoding='utf-8') as stream: stream.write(text)
+                os.replace(temporary,config.gitconfig_path)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
     env={'PATH':os.environ.get('PATH','') if os.name=='nt' else config.agent_path,
          'HOME':str(home),'LANG':'C.UTF-8','GIT_CONFIG_GLOBAL':str(config.gitconfig_path),
          'GIT_CONFIG_NOSYSTEM':'1','GIT_TERMINAL_PROMPT':'0','GIT_LFS_SKIP_SMUDGE':'1'}

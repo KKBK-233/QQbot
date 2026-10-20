@@ -141,9 +141,9 @@ class WorkerTests(unittest.TestCase):
         key_index=command.index(str(self.cfg.dsh_home/'.env'))
         self.assertEqual(command[key_index-1],'--ro-bind')
 
-    def run_fake(self,*,agent_exit=0,tests_pass=True,change=True):
+    def run_fake(self,*,agent_exit=0,tests_pass=True,change=True,scope='code_change'):
         worker=Worker(self.cfg)
-        task=worker.submit('1020050112','add a file')
+        task=worker.submit('1020050112','add a file',scope=scope)
         # 源目录中的未提交凭据不允许复制进任务。
         (self.source/'.env').write_text('private=fixture')
         folder=worker.store.directory(task['id'])
@@ -183,6 +183,12 @@ class WorkerTests(unittest.TestCase):
     def test_empty_patch_is_reported(self):
         result,_=self.run_fake(change=False)
         self.assertEqual(result['reason'],'no_changes')
+
+    def test_persistent_workflow_task_rejects_out_of_scope_patch(self):
+        result,_=self.run_fake(scope='persistent_workflow')
+        self.assertEqual(result['status'],'failed')
+        self.assertIn('workflow_scope_violation',result['result']['error'])
+        self.assertIsNone(result['result']['test_exit'])
 
     def test_cli_reports_invalid_id_as_json(self):
         from contextlib import redirect_stderr
