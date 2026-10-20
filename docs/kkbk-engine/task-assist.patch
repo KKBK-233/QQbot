@@ -54,7 +54,7 @@
 -          parameters=[ToolParameterInfo(name='message_id', param_type=ToolParamType.STRING, description='本群图片/转发消息编号，或附带图片引用的任务编号', required=True)],
 +    @Tool('analyze_task_image', description='读取本群指定消息、引用或合并转发的原图。转发图片按完整记录深度优先编号，image_numbers 可选取折叠内容里的图片，每次最多4张，可分批读取；未指定时先读转发前4张并返回剩余序号，普通消息沿用最多2张。只据本批原图回答，不把占位符当成已经看过图片。',
 +          parameters=[ToolParameterInfo(name='message_id', param_type=ToolParamType.STRING, description='本群图片/转发消息编号，或附带图片引用的任务编号', required=True),
-+                      ToolParameterInfo(name='image_numbers', param_type=ToolParamType.ARRAY, description='可选，完整转发记录中1起算的图片序号，最多4个不同正整数，例如[3,4]', required=False)],
++                      ToolParameterInfo(name='image_numbers', param_type=ToolParamType.ARRAY, description='可选，完整转发记录中1起算的图片序号，最多4个不同正整数，例如[3,4]', required=False, items_schema={'type': 'integer', 'minimum': 1})],
            visibility='visible', core_tool=True, timeout_ms=60000)
      async def analyze(self, message_id: str, **kwargs):
 -        return await self.flow.analyze(self.ctx, str(kwargs.get('stream_id') or kwargs.get('chat_id') or ''), message_id)

@@ -167,3 +167,10 @@ QQ / SnowLuma → MaiBot 基础设施
 - verify-development.py 通过：管理员工具 5 个（包含 development_rollback），普通群友 0 个开发工具，真实来源绑定与 socket 查询正常。
 - 已从运行中的 dev-worker 环境确认自动发布启用、工作流目录和线上加载器路径正确；加载器接受 conservative-web-research@1.0.0，部署前后工作流文件摘要完全一致。
 - 本轮未提交开发任务、未发布或回退测试规则、未发送群消息。真实教学触发发布、后续任务使用新版和回退演练尚待单独验收。
+
+### 转发工具声明遗漏修复
+
+- 群里出现统一任务失败回复；日志确认失败位于 list_tools → 宿主 ToolParam 规范化，尚未调用模型，也未提交开发任务。新增 image_numbers 数组参数漏填 items_schema，导致整个工具列表无法生成，普通问答同样受影响。
+- 为该参数补充整数元素 Schema；保留宿主对无效工具声明的显式错误，不通过跳过校验掩盖问题。
+- 新增 verify-task-tool-schema.py，执行实际 SDK 声明、宿主 ComponentQueryService 参数转换、PluginToolProvider 与 ToolRegistry 发现及最终模型工具定义转换，避免只验证直接调用和取图后漏掉声明协议。
+- 候选转换验证通过，模型调用与 QQ 发送均为 0；本轮仅针对任务插件入口更新并重启 MaiBot，不改工作流和开发服务。
