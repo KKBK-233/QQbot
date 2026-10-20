@@ -31,6 +31,13 @@ class SlidingWindowLimiter:
         events.append(now)
         return True
 
+    def retry_after(self, key: str, now: float) -> float:
+        """返回下一个可用名额的等待秒数；查询本身不占用名额。"""
+        events = self._events.setdefault(key, deque())
+        while events and events[0] <= now - self._window_seconds:
+            events.popleft()
+        return max(0.0, events[0] + self._window_seconds - now) if len(events) >= self._max_events else 0.0
+
 
 class CircuitBreaker:
     """连续失败熔断，冷却后自动恢复。"""

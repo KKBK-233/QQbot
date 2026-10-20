@@ -18,9 +18,11 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume'])
     args=parser.parse_args()
     names=['src/kkbk_engine/runtime.py','src/kkbk_engine/workflows.py']
+    if args.phase=='task-resume':
+        names=['src/kkbk_engine/runtime.py','src/kkbk_engine/builtin_tools.py','src/kkbk_engine/guards.py']
     if args.phase=='development':
         names+=['src/kkbk_engine/development.py','src/kkbk_engine/dev_protocol.py',
                 'src/kkbk_engine/teaching.py','src/kkbk_engine/prompt.py']
@@ -28,7 +30,7 @@ def main():
     if args.phase=='workflows':
         files += [(p,TARGET/p.relative_to(SOURCE/'MaiBot'))
                   for p in (SOURCE/'MaiBot/workflows').rglob('*.json')]
-    else:
+    elif args.phase=='development':
         files += [(p,DEV/'worker-code/dev_worker'/p.name) for p in (SOURCE/'dev_worker').glob('*.py')]
     stamp=time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())+'-'+str(os.getpid())
     release=DEV/'releases'/stamp
