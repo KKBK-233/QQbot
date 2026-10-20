@@ -297,3 +297,38 @@ def test_abort_can_explicitly_exhaust_retry() -> None:
     gate.abort(retry=False)
     assert gate.step(1) is None
     assert gate.next_wakeup() is None
+
+
+# 戳一戳只邀请模型查看，明确点名仍须回应。
+def test_poke_allows_silent_through_host_validation() -> None:
+    from src.kkbk_engine.actions import ModelAction, ValidationContext, validate_action
+    from src.kkbk_engine.prompt import render_turn_block
+
+    gate = make_gate()
+    gate.observe(msg(0, f"群友戳了戳KKBK{POKE_SUFFIX}", notify=True))
+    look = gate.step(0)
+    assert look is not None and look.mention_kind == MENTION_POKE
+    assert not look.requires_reply
+    turn = render_turn_block(look, 0, [])
+    assert "可以选 silent 保持安静" in turn
+    assert "必须回应" not in turn
+    action = ModelAction(action="silent", track="leave")
+    context = ValidationContext(
+        requires_reply=look.requires_reply, quotable={}, no_quote_user_ids=frozenset(), max_chars=1500
+    )
+    assert validate_action(action, context) == action
+    gate.complete(SILENT_LEAVE, 0)
+    assert gate.in_flight is None
+
+
+def test_poke_does_not_override_pending_direct_mention() -> None:
+    for poke_first in (False, True):
+        gate = make_gate()
+        mention = msg(0, "在吗", mentions=(BOT,), message_id="direct")
+        poke = msg(0, f"群友戳了戳KKBK{POKE_SUFFIX}", notify=True)
+        for message in ((poke, mention) if poke_first else (mention, poke)):
+            gate.observe(message)
+        look = gate.step(0)
+        assert look is not None and look.requires_reply
+        assert look.mention_kind == MENTION_AT
+        assert look.trigger_message_id == "direct"

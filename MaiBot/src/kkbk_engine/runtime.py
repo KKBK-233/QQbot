@@ -260,8 +260,11 @@ class KKBKHeartFlowChatting:
                     raise
                 logger.warning(f"{self.log_prefix} 当前模型请求补试一次：{type(exc).__name__}")
                 if isinstance(exc, ActionError):
+                    # 补试只重申本轮真实约束，不能把可沉默的戳一戳重新变成强制回应。
+                    reply_rule = ("本轮必须回应，不能选 silent。" if validation.requires_reply
+                                  else "本轮允许选择 silent，不要求回应。")
                     items.append(text_item(RoleType.User, "上次输出未通过动作校验："
-                                           + str(exc) + "。请按 JSON 格式修正，点名请求必须回应。"))
+                                           + str(exc) + "。请按 JSON 格式修正。" + reply_rule))
                 await asyncio.sleep(1.0)
 
     @staticmethod

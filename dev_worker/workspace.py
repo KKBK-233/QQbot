@@ -1,0 +1,160 @@
+"""独立源码副本、开发环境与 Linux 文件隔离，不加载生产配置。"""
+from pathlib import Path
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+
+from .process import run_process
+
+def host_env(config):
+    """Git 只使用 worker 专用配置，不继承凭据或影响用户全局 Git。"""
+    config.root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    home=config.root/'host-home'
+    home.mkdir(exist_ok=True,mode=0o700)
+    text='[user]\n name = kkbk-dev-worker\n email = worker@localhost\n[safe]\n'
+    for path in (config.source_repo.resolve(),config.source_repo.resolve()/'.git'):
+        text+=' directory = '+json.dumps(str(path))+'\n'
+    config.gitconfig_path.write_text(text,encoding='utf-8')
+    env={'PATH':os.environ.get('PATH','') if os.name=='nt' else config.agent_path,
+         'HOME':str(home),'LANG':'C.UTF-8','GIT_CONFIG_GLOBAL':str(config.gitconfig_path),
+         'GIT_CONFIG_NOSYSTEM':'1','GIT_TERMINAL_PROMPT':'0','GIT_LFS_SKIP_SMUDGE':'1'}
+    if os.name=='nt':
+        for name in ('SYSTEMROOT','WINDIR','TEMP','TMP'):
+            if name in os.environ: env[name]=os.environ[name]
+    return env
+
+def resolve_commit(config, ref=None):
+    result=subprocess.run(['git','-C',str(config.source_repo),'rev-parse','--verify','--end-of-options',
+                           (ref or config.base_ref)+'^{commit}'],env=host_env(config),capture_output=True,
+                          timeout=15,check=True)
+    commit=result.stdout.decode().strip()
+    if len(commit)!=40 or any(c not in '0123456789abcdef' for c in commit):
+        raise ValueError('无法解析固定源码提交')
+    return commit
+
+def prepare_clone(config, folder, commit, cancel):
+    """仅克隆已提交内容，不复制源仓库的配置、数据或未提交修改。"""
+    workspace=folder/'ws'
+    if workspace.exists(): raise ValueError('工作副本已存在，不覆盖')
+    env=host_env(config)
+    commands=[['git','clone','--quiet','--no-hardlinks','--no-checkout',str(config.source_repo),str(workspace)],
+              ['git','-C',str(workspace),'checkout','--quiet','--detach',commit],
+              ['git','-C',str(workspace),'remote','remove','origin']]
+    for index,command in enumerate(commands):
+        result=run_process(command,cwd=config.root,env=env,stdout=folder/f'prepare-{index}.log',
+            stderr=folder/f'prepare-{index}.err',timeout=config.prepare_timeout_sec,cancel=cancel,
+            max_bytes=config.max_log_bytes)
+        if result.exit_code: raise RuntimeError(f'clone_step_{index}_failed')
+    return workspace
+
+def setup_base(config, full=False):
+    """显式准备开发测试依赖；默认只装 pytest，不复制生产虚拟环境。"""
+    env=host_env(config)
+    commands=[]
+    if not config.base_python.exists():
+        commands.append([config.system_python,'-m','venv',str(config.base_venv)])
+    install=[str(config.base_python),'-m','pip','install','--disable-pip-version-check','-i',config.pip_index_url,
+             'pytest','pytest-asyncio']
+    if full: install+=['-r',str(config.requirements_path())]
+    commands.append(install)
+    for index,command in enumerate(commands):
+        result=run_process(command,cwd=config.root,env=env,stdout=config.root/f'setup-{index}.log',
+            stderr=config.root/f'setup-{index}.err',timeout=config.prepare_timeout_sec,
+            max_bytes=config.max_log_bytes)
+        if result.exit_code: raise RuntimeError(f'setup_step_{index}_failed，检查开发基座日志')
+    return {'base_python':str(config.base_python),'full_requirements':full}
+
+def prepare_environment(config, folder, cancel):
+    """任务 venv 可写，基础包只读；代理不取得账本或产物目录的写权限。"""
+    if not config.base_python.exists(): raise RuntimeError('请先执行 dev_worker setup')
+    venv=folder/'venv'
+    result=run_process([config.system_python,'-m','venv',str(venv)],cwd=folder,env=host_env(config),
+        stdout=folder/'venv.log',stderr=folder/'venv.err',timeout=config.prepare_timeout_sec,cancel=cancel)
+    if result.exit_code: raise RuntimeError('task_venv_failed')
+    base_sites=list((config.base_venv/'lib').glob('python*/site-packages'))
+    task_sites=list((venv/'lib').glob('python*/site-packages'))
+    if len(base_sites)!=1 or len(task_sites)!=1: raise RuntimeError('开发 venv 目录结构异常')
+    (task_sites[0]/'base.pth').write_text(str(base_sites[0])+'\n')
+    home=folder/'agent-home'
+    profile=home/'profiles/headless'
+    profile.mkdir(parents=True,mode=0o700)
+    source=config.dsh_home/'profiles/headless'
+    for name in ('package.json','cordis.yml','cordis.patch.yml','pnpm-workspace.yaml'):
+        path=source/name
+        if path.exists(): shutil.copyfile(path,profile/name)
+    if not (profile/'package.json').is_file(): raise RuntimeError('缺少已准备的 DSH headless profile')
+    for name in ('sessions','storages'):
+        (home/name).mkdir(mode=0o700)
+    (home/'.env').touch(mode=0o600)
+    patch=folder/'dsh-patch.yml'
+    patch.write_text(f'- id: bash-sandbox\n  config:\n    timeoutMs: {config.bash_timeout_ms}\n',encoding='utf-8')
+
+def agent_env(config,folder):
+    """最小环境不导出空密钥，DSH 在隔离环境读取专用凭据文件。"""
+    env={'PATH':str(folder/'venv/bin')+os.pathsep+config.agent_path,
+            'HOME':str(folder/'agent-home'),'DSH_HOME':str(folder/'agent-home'),
+            'DSH_TELEMETRY_DISABLED':'1','LANG':'C.UTF-8','VIRTUAL_ENV':str(folder/'venv'),
+            'PYTHONDONTWRITEBYTECODE':'1','GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_NOSYSTEM':'1'}
+    if os.name=='nt':
+        for name in ('SYSTEMROOT','WINDIR','TEMP','TMP'):
+            if name in os.environ: env[name]=os.environ[name]
+    return env
+
+def sandbox_command(config,folder,command,*,agent=False):
+    """开发阶段可联网；测试/补丁收集断网，生产及 Windows 挂载目录均隐藏。"""
+    if not config.use_sandbox:
+        return [str(value) for value in command]
+    if not Path('/usr/bin/bwrap').exists(): raise RuntimeError('缺少 bwrap，不降级到宿主执行')
+    if (folder/'ws/.git').is_symlink(): raise RuntimeError('拒绝符号链接 Git 目录')
+    args=['/usr/bin/bwrap','--ro-bind','/','/','--dev','/dev','--proc','/proc',
+          '--tmpfs','/home','--tmpfs','/root','--tmpfs','/mnt','--tmpfs','/run','--tmpfs','/tmp',
+          '--unshare-pid','--unshare-ipc','--unshare-uts','--die-with-parent','--new-session',
+          '--cap-drop','ALL','--bind',str(folder/'ws'),str(folder/'ws'),
+          '--bind',str(folder/'venv'),str(folder/'venv'),
+          '--ro-bind',str(config.base_venv),str(config.base_venv),
+          '--bind',str(folder/'agent-home'),str(folder/'agent-home')]
+    if agent:
+        if not (config.dsh_home/'.env').is_file(): raise RuntimeError('DSH 专用凭据文件未准备')
+        # DSH 启动时会重写 cordis.yml，因此只给它任务私有 profile，绝不映射全局 profile 可写。
+        args+=['--ro-bind',str(config.dsh_root),str(config.dsh_root),
+               '--ro-bind',str(config.dsh_home/'.env'),str(folder/'agent-home/.env'),
+               '--ro-bind',str(folder/'dsh-patch.yml'),str(folder/'dsh-patch.yml')]
+    else:
+        args+=['--unshare-net']
+    args+=['--chdir',str(folder/'ws'),'--',*[str(value) for value in command]]
+    return args
+
+def developer_prompt(task):
+    return ('请在当前独立工作副本完成开发任务。可以读取和修改整个项目、运行命令与测试。'
+            '只处理本任务，不访问生产、其他工作区或凭据，不提交、推送或部署。'
+            '测试使用当前 VIRTUAL_ENV 的 Python。最后说明改动、测试和未完成事项。\n\n'+task)
+
+def agent_command(config,folder,task):
+    command=[config.dsh_bin,'--profile','headless','--patch',folder/'dsh-patch.yml',
+             '--json',developer_prompt(task)]
+    return sandbox_command(config,folder,command,agent=True)
+
+def collect_patch(config,folder,base_commit,cancel):
+    """Git 在断网隔离环境执行，防止仓库过滤器在宿主执行；包含新增文件。"""
+    env=agent_env(config,folder)
+    git='/usr/bin/git' if config.use_sandbox else 'git'
+    prefix=[git,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
+    for label,command in [('stage',prefix+['add','-A','--','.']),
+                           ('patch',prefix+['diff','--cached','--binary','--no-ext-diff','--no-textconv',base_commit,'--','.']),
+                           ('files',prefix+['diff','--cached','--name-only','-z',base_commit,'--','.'])]:
+        output=folder/('patch.diff' if label=='patch' else label+'.log')
+        result=run_process(sandbox_command(config,folder,command),cwd=folder/'ws',env=env,
+            stdout=output,stderr=folder/(label+'.err'),timeout=config.prepare_timeout_sec,cancel=cancel,
+            max_bytes=config.max_patch_bytes if label=='patch' else config.max_log_bytes)
+        if result.exit_code: raise RuntimeError(label+'_failed')
+    patch=(folder/'patch.diff').read_bytes()
+    names=(folder/'files.log').read_bytes().decode('utf-8').split('\0')
+    return {'sha256':hashlib.sha256(patch).hexdigest(),'bytes':len(patch),
+            'files':[name for name in names if name]}
+
+def test_command(config,folder):
+    # 命令来自维护者配置而非模型输出或任务正文；不使用 shell=True。
+    return sandbox_command(config,folder,[folder/'venv/bin/python',*shlex.split(config.test_command)])

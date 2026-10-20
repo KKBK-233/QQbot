@@ -149,3 +149,31 @@ def test_missing_legacy_directory_preserves_tool_path(tmp_path):
     runtime._tool_llm.generate_response_with_context.return_value = response()
     asyncio.run(runtime._turn(look()))
     runtime._tool_llm.generate_response_with_context.assert_awaited_once()
+
+
+@pytest.mark.parametrize("requires_reply", [False, True])
+def test_action_retry_preserves_current_reply_requirement(tmp_path, requires_reply):
+    """格式补试不得把可沉默的请求变成强制回复。"""
+    runtime, _ = runtime_harness(tmp_path)
+    requests = []
+
+    async def generate(callback, options):
+        requests.append(callback(None))
+        if len(requests) == 1:
+            result = response()
+            result.response = '{"action":"silent"}'
+            return result
+        return response() if requires_reply else response("silent", text="")
+
+    runtime._llm.generate_response_with_context.side_effect = generate
+    validation = ValidationContext(
+        requires_reply=requires_reply, quotable={}, no_quote_user_ids=frozenset(), max_chars=1500
+    )
+    _, action = asyncio.run(runtime._generate([], heavy=False, specs=[], validation=validation))
+    correction = requests[1][-1].text
+    assert action.action == ("reply" if requires_reply else "silent")
+    if requires_reply:
+        assert "本轮必须回应" in correction
+    else:
+        assert "本轮允许选择 silent" in correction
+        assert "必须回应" not in correction

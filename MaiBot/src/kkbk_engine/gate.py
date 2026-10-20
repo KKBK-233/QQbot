@@ -17,7 +17,7 @@ import random
 from .config import EngineConfig
 from .guards import LoopBreaker
 from .inbound import InboundMessage
-from .triggers import MENTION_AT, MentionDetector, is_question
+from .triggers import MENTION_AT, MENTION_POKE, MentionDetector, is_question
 
 STATE_SCAN = "scan"
 STATE_TRACK = "track"
@@ -47,7 +47,7 @@ class LookRequest:
     trigger_message_id: Optional[str] = None
     mention_kind: Optional[str] = None
     requires_reply: bool = False
-    """点名时不允许 silent。"""
+    """明确点名时不允许 silent；戳一戳允许模型自行决定。"""
     no_quote_user_ids: FrozenSet[str] = frozenset()
     """已标记机器人和防死循环冷却中的账号，不引用其消息。"""
 
@@ -141,7 +141,9 @@ class SessionGate:
 
         self._pending.append(message)
         if mention_kind is not None:
-            self._pending_mention = (mention_kind, message)
+            # 戳一戳不能覆盖同批尚未处理的明确点名，避免取消原有回复义务。
+            if mention_kind != MENTION_POKE or self._pending_mention is None or self._pending_mention[0] == MENTION_POKE:
+                self._pending_mention = (mention_kind, message)
         elif is_question(message, min_chars=self._config.gate.question_min_chars):
             due_at = message.timestamp + self._config.gate.question_wait_seconds
             self._questions.append(_PendingQuestion(message.message_id, message.user_id, message.timestamp, due_at))
@@ -247,7 +249,7 @@ class SessionGate:
             message_ids=tuple(message.message_id for message in self._pending),
             trigger_message_id=trigger_message_id,
             mention_kind=mention_kind,
-            requires_reply=reason == REASON_MENTION,
+            requires_reply=reason == REASON_MENTION and mention_kind != MENTION_POKE,
             no_quote_user_ids=self._blocked_user_ids | self._loop_breaker.cooldown_users(now),
         )
         self._pending.clear()

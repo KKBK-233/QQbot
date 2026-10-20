@@ -2,6 +2,8 @@
 
 根目录保留被启动脚本或 Supervisor 固定路径引用的运行组件，以及暂未移动的安装/配置入口。历史个案探针不属于当前验收入口。
 
+独立开发执行入口为 `python -m dev_worker`，不属于生产部署脚本。setup、submit、run、status、cancel 用法见 `dev_worker/README.md`；当前不自动发布补丁。
+
 ## checks：核验与诊断
 
 | 脚本 | 用途 | 执行范围 |

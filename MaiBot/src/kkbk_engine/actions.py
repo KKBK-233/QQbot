@@ -40,7 +40,7 @@ class ModelAction:
 @dataclass(frozen=True)
 class ValidationContext:
     requires_reply: bool
-    """点名时不允许 silent（防死循环冷却期的非 @ 点名不会走到这里）。"""
+    """明确点名时不允许 silent，戳一戳除外（冷却期的非 @ 点名不会走到这里）。"""
     quotable: Mapping[str, str]
     """当前上下文里可引用的消息编号 -> 发送者 QQ 号。"""
     no_quote_user_ids: FrozenSet[str]
