@@ -211,7 +211,7 @@ def test_action_retry_preserves_current_reply_requirement(tmp_path, requires_rep
         requests.append(callback(None))
         if len(requests) == 1:
             result = response()
-            result.response = '{"action":"silent"}'
+            result.response = ''
             return result
         return response() if requires_reply else response("silent", text="")
 
@@ -227,6 +227,32 @@ def test_action_retry_preserves_current_reply_requirement(tmp_path, requires_rep
     else:
         assert "本轮允许选择 silent" in correction
         assert "必须回应" not in correction
+
+
+def test_empty_then_missing_track_can_submit_development_once(tmp_path):
+    """复现空响应后的补试漏字段：开发仍提交一次，最终答复也只发一次。"""
+    runtime, _ = runtime_harness(tmp_path / "not-installed")
+    empty = response()
+    empty.response = ""
+    accepted = response("escalate", text="", task="实现图片反查并查证依赖安全性")
+    accepted.response = json.dumps({"action": "escalate", "task": "实现图片反查并查证依赖安全性"})
+    runtime._llm.generate_response_with_context.side_effect = [empty, accepted]
+    call = SimpleNamespace(func_name="development_submit", args={}, call_id="dev-one")
+    runtime._registry.list_tools.return_value.append(SimpleNamespace(
+        name="development_submit", provider_type="builtin", to_llm_definition=lambda: {}))
+    final = response(text="已排队：offline-dev-one")
+    final.response = json.dumps({"action": "reply", "text": "已排队：offline-dev-one"})
+    runtime._tool_llm.generate_response_with_context.side_effect = [response(call=call), final]
+    runtime._invoke.return_value = ToolResult(content="开发任务已排队：offline-dev-one")
+
+    asyncio.run(runtime._turn(look()))
+
+    assert runtime._llm.generate_response_with_context.await_count == 2
+    runtime._invoke.assert_awaited_once()
+    assert runtime._invoke.await_args.args[0].func_name == "development_submit"
+    runtime._send.assert_awaited_once()
+    assert "offline-dev-one" in runtime._send.await_args.args[0].text
+    assert runtime._send.await_args.args[0].track == "leave"
 
 
 def real_tools(runtime, monkeypatch, clock=None):

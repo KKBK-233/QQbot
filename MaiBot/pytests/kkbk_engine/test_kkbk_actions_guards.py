@@ -46,11 +46,25 @@ def test_parse_rejects_bad_input() -> None:
         ('{"action": "reply", "track": "stay", "send_to": "x"}', "unknown_keys"),
         ('{"action": "shout", "track": "stay"}', "bad_action"),
         ('{"action": "reply", "track": "maybe"}', "bad_track"),
+        ('{"action": "reply", "track": null}', "bad_track"),
         ('{"action": "reply", "track": "stay", "text": 1}', "bad_type"),
     ]:
         with pytest.raises(ActionError) as info:
             parse_action(raw)
         assert info.value.code == code
+
+
+@pytest.mark.parametrize("raw", [
+    '{"action":"reply","text":"收到"}',
+    '{"action":"escalate","task":"提交开发需求"}',
+    '{"action":"silent"}',
+])
+def test_missing_track_ends_attention_without_weakening_action_validation(raw) -> None:
+    """辅助字段可省略，但动作内容与本轮必须回应约束仍由宿主校验。"""
+    assert validate_action(parse_action(raw), context()).track == "leave"
+    assert error_code('{"action":"silent"}', context(requires_reply=True)) == "silent_on_mention"
+    assert error_code('{"action":"escalate"}', context()) == "empty_task"
+    assert error_code('{"text":"收到"}', context()) == "bad_action"
 
 
 def test_validate_rules() -> None:

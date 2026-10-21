@@ -18,8 +18,12 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol'])
     args=parser.parse_args()
+    # 动作协议修复独立部署，避免连带发布尚未验收的运行时及检索候选。
+    if args.phase=='action-protocol':
+        names=['src/kkbk_engine/actions.py','src/kkbk_engine/prompt.py']
+        return install(args.phase,[(SOURCE/'MaiBot'/name,TARGET/name) for name in names])
     # 适配器入站媒体预算只改适配器两个文件，不连带更新引擎运行时。
     if args.phase=='snowluma-adapter':
         adapter='plugins/MaiBot-SnowLuma-Adapter/codecs/inbound/'

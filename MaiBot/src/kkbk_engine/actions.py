@@ -1,7 +1,7 @@
 """模型动作的解析与宿主校验。
 
 模型每次只输出一个 JSON 动作；即使被注入，最坏结果也只是一个被拒绝的动作。
-校验失败抛出 ActionError，由调用方决定是否带着错误码重问一次，不在这里静默修正。
+track 可省略，默认结束关注；其他校验失败抛出 ActionError，由调用方决定是否重问。
 """
 
 from dataclasses import dataclass
@@ -68,7 +68,8 @@ def parse_action(raw: str) -> ModelAction:
     action = data.get("action")
     if action not in ACTIONS:
         raise ActionError("bad_action", str(action))
-    track = data.get("track")
+    # 关注状态不参与动作授权；省略时结束关注，显式非法值仍暴露为协议错误。
+    track = data.get("track", "leave")
     if track not in TRACKS:
         raise ActionError("bad_track", str(track))
     return ModelAction(
