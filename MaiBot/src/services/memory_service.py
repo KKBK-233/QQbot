@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import asyncio
+
 from src.A_memorix.host_service import a_memorix_host_service
 from src.common.logger import get_logger
 
@@ -90,6 +92,13 @@ class PersonProfileResult:
 
 
 class MemoryService:
+    async def list_teachings(self, *, teacher_id: str | None, hashes=None) -> List[Dict[str, Any]]:
+        """给任务层提供有效教学，不暴露原生 SQLite 路径或表结构。"""
+        from .memory_teaching_repository import load_teachings
+
+        database = a_memorix_host_service.get_runtime_data_dir() / "metadata/metadata.db"
+        return await asyncio.to_thread(load_teachings, database, teacher_id, hashes)
+
     async def _invoke(
         self,
         component_name: str,

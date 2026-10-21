@@ -38,9 +38,22 @@ class IdentityConfig:
     """唤醒名，匹配时忽略大小写。"""
     operator_user_ids: FrozenSet[str] = frozenset({"1020050112"})
     """重工具与管理授权只看实时发送者 QQ 号，永不来自记忆、摘要或聊天内容。"""
+    teacher_user_id: str = ""
+    """留空时使用唯一维护者；多维护者场景可明确指定其中一人为方法教师。"""
     group_whitelist: FrozenSet[str] = frozenset({"1022382380", "894179464", "427204073"})
     blocked_robot_user_ids: FrozenSet[str] = frozenset({"3889590033"})
     """OneBot 成员资料 is_robot=true 的账号；运行期由成员查询刷新，这里是已知初值。"""
+
+    @property
+    def method_teacher_id(self) -> str | None:
+        """教学身份与维护者配置同源，不自动沿用旧账号。"""
+        if self.teacher_user_id:
+            if self.teacher_user_id not in self.operator_user_ids:
+                raise ValueError("方法教师必须是已配置维护者")
+            return self.teacher_user_id
+        if len(self.operator_user_ids) == 1:
+            return next(iter(self.operator_user_ids))
+        return None
 
 
 @dataclass(frozen=True)
@@ -102,3 +115,5 @@ class EngineConfig:
     forward: ForwardLimits = field(default_factory=ForwardLimits)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     task: TaskBudget = field(default_factory=TaskBudget)
+    plugin_tools: FrozenSet[str] = frozenset({"chatgpt_image", "web_search", "read_webpage", "analyze_task_image"})
+    """交给任务层的插件工具，同时沿用既有插件工具限流。"""

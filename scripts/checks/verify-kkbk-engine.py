@@ -1,4 +1,4 @@
-"""在生产虚拟环境检查暂存引擎；模拟模型和发送，不向 QQ 发消息。"""
+"""在生产虚拟环境检查线上引擎；--stage 才检查暂存副本，默认模拟模型和发送。"""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +13,8 @@ STAGE = Path('/home/qqbot/QQbot/kkbk-engine-stage')
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 import src
-src.__path__.insert(0, str(STAGE / 'src'))
+if '--stage' in sys.argv:
+    src.__path__.insert(0, str(STAGE / 'src'))
 
 from src.common.data_models.llm_service_data_models import LLMResponseResult
 from src.core.tooling import ToolExecutionResult, ToolSpec
@@ -49,6 +50,7 @@ def open_look(value):
 
 async def main():
     """验证普通单次回复、失败补试、工具后失败不重放、宿主身份绑定及公开接口。"""
+    print('验证引擎来源：', sys.modules[KKBKHeartFlowChatting.__module__].__file__)
     value = runtime()
     specs = await value._registry.list_tools(value._availability(None))
     names = {spec.name for spec in specs}
@@ -101,11 +103,12 @@ async def main():
     anchor = SimpleNamespace(message_info=SimpleNamespace(user_info=SimpleNamespace(user_id='1020050112')))
     forged = ToolCall(call_id='identity', func_name='web_search', args={
         'query': '离线验收', 'user_id': 'forged', 'stream_id': 'other', '_sandbox_trusted_context': True})
-    await value._invoke(forged, [ToolSpec(name='web_search')], anchor)
+    await value._invoke(forged, [ToolSpec(name='web_search')], anchor, wait_budget=[240])
     invocation, context = value._registry.invoke.await_args.args
     assert context.user_id == '1020050112' and context.session_id == 'kkbk-offline-test'
     assert invocation.arguments == {'query': '离线验收'}
-    assert KKBKHeartFlowChatting._retryable(RuntimeError('HTTP 401')) is False
+    from src.llm_models.exceptions import RespNotOkException
+    assert KKBKHeartFlowChatting._retryable(RespNotOkException(401)) is False
     assert value.config.gate.debounce_seconds == 3 and value.config.history.max_entries == 80
     # 使用真实会话记录检查入站映射、历史恢复和请求组装，不触发发送。
     from src.common.message_repository import find_messages
@@ -116,7 +119,7 @@ async def main():
     assert incoming.message_id and incoming.timestamp > 0
     value._append(recent[-1], observe=False)
     manager = SimpleNamespace(invoke_hook=AsyncMock(side_effect=lambda name, **kwargs: SimpleNamespace(kwargs=kwargs)))
-    with patch('src.kkbk_engine.runtime.get_plugin_runtime_manager', return_value=manager):
+    with patch('src.kkbk_engine.request_context.get_plugin_runtime_manager', return_value=manager):
         prepared = await value._prepare(open_look(value), specs)
     assert len(prepared) == 2
     print('真实历史与配置组装通过')

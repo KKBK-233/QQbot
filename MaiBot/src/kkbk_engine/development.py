@@ -20,9 +20,8 @@ class DevelopmentToolProvider:
     def teaching(self):
         """沿用现有原生记忆后端，不修改个人事实与普通记忆处理器。"""
         if self._teaching is None:
-            from src.A_memorix.host_service import a_memorix_host_service
             from src.services.memory_service import memory_service
-            self._teaching=TeachingMemory(memory_service,a_memorix_host_service.get_runtime_data_dir()/'metadata/metadata.db')
+            self._teaching=TeachingMemory(memory_service,identity=self.runtime.config.identity)
         return self._teaching
 
     def allowed(self, context):

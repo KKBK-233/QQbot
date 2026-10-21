@@ -18,8 +18,14 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session','engine-review'])
     args=parser.parse_args()
+    # 引擎审阅修复成套更新依赖；不写入 DSH worker、配置、工作流或现有插件。
+    if args.phase=='engine-review':
+        files=[(p,TARGET/'src/kkbk_engine'/p.name) for p in (SOURCE/'MaiBot/src/kkbk_engine').glob('*.py')]
+        files += [(SOURCE/'MaiBot/src/services'/name,TARGET/'src/services'/name)
+                  for name in ['memory_service.py','memory_teaching_repository.py']]
+        return install(args.phase,files)
     # 会话控制只更新开发工具与 worker，不连带发布检索候选或覆盖线上工作流。
     if args.phase=='development-session':
         names=['src/kkbk_engine/development.py','src/kkbk_engine/dev_protocol.py','src/kkbk_engine/prompt.py']

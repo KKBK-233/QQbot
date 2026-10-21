@@ -16,7 +16,9 @@ QQ / SnowLuma 提供平台接入，MaiBot 提供消息、存储、模型、记�
 
 ## 项目入口
 
-- [完整实现计划与验收记录](docs/kkbk-engine/harness-plan.md)
+- [稳定架构与实现计划](docs/kkbk-engine/harness-plan.md)
+- [部署与真实验收状态](docs/kkbk-engine/status.md)
+- [历史变更与证据](docs/kkbk-engine/CHANGELOG.md)
 - [当前功能与精简候选](docs/kkbk-engine/feature-inventory.md)
 - [引擎接入说明](docs/kkbk-engine/README.md)
 - [脚本目录与使用范围](scripts/README.md)
