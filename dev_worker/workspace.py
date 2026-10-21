@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -163,29 +164,39 @@ def sandbox_command(config,folder,command,*,agent=False):
 
 def developer_prompt(task):
     return ('请在当前独立工作副本完成开发任务。可以读取和修改整个项目、运行命令与测试。'
+            '开发范围包括人设、system 与任务提示词、工作流、插件、依赖和执行代码。'
+            '需要新增执行能力时补齐代码与接线，不用一份文字规则代替实现。'
+            '在授权目标内持续修复并逐项验收；缺少信息时明确提出问题，等待协调者在同一会话补充。'
             '只处理本任务，不访问生产、其他工作区或凭据，不提交、推送或部署。'
             '测试使用当前 VIRTUAL_ENV 的 Python。最后说明改动、测试和未完成事项。\n\n'+task)
 
-def agent_command(config,folder,task):
+def agent_command(config,folder,task,session_id=None):
     command=[config.dsh_bin,'--profile','headless','--patch',folder/'dsh-patch.yml',
-             '--json',developer_prompt(task)]
+             '--json']
+    if session_id:
+        # 使用实际安装的 headless 会话接口；标识只从持久事件读取，不接收模型指定。
+        if not isinstance(session_id,str) or not re.fullmatch(r'session-[A-Za-z0-9-]{1,100}', session_id):
+            raise ValueError('DSH 会话标识无效')
+        command += ['--session-id',session_id]
+    command += [developer_prompt(task)]
     return sandbox_command(config,folder,command,agent=True)
 
-def collect_patch(config,folder,base_commit,cancel):
+def collect_patch(config,folder,base_commit,cancel,artifact_folder=None):
     """Git 在断网隔离环境执行，防止仓库过滤器在宿主执行；包含新增文件。"""
+    output_folder=artifact_folder or folder
     env=agent_env(config,folder)
     git='/usr/bin/git' if config.use_sandbox else 'git'
     prefix=[git,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
     for label,command in [('stage',prefix+['add','-A','--','.']),
                            ('patch',prefix+['diff','--cached','--binary','--no-ext-diff','--no-textconv',base_commit,'--','.']),
                            ('files',prefix+['diff','--cached','--name-only','-z',base_commit,'--','.'])]:
-        output=folder/('patch.diff' if label=='patch' else label+'.log')
+        output=output_folder/('patch.diff' if label=='patch' else label+'.log')
         result=run_process(sandbox_command(config,folder,command),cwd=folder/'ws',env=env,
-            stdout=output,stderr=folder/(label+'.err'),timeout=config.prepare_timeout_sec,cancel=cancel,
+            stdout=output,stderr=output_folder/(label+'.err'),timeout=config.prepare_timeout_sec,cancel=cancel,
             max_bytes=config.max_patch_bytes if label=='patch' else config.max_log_bytes)
         if result.exit_code: raise RuntimeError(label+'_failed')
-    patch=(folder/'patch.diff').read_bytes()
-    names=(folder/'files.log').read_bytes().decode('utf-8').split('\0')
+    patch=(output_folder/'patch.diff').read_bytes()
+    names=(output_folder/'files.log').read_bytes().decode('utf-8').split('\0')
     return {'sha256':hashlib.sha256(patch).hexdigest(),'bytes':len(patch),
             'files':[name for name in names if name]}
 

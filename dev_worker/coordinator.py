@@ -3,6 +3,7 @@ import hashlib
 import json
 
 from . import release
+from .worker import event_summary
 
 ALLOWED_GROUPS=frozenset({'1022382380','894179464','427204073'})
 
@@ -37,6 +38,19 @@ class Coordinator:
                if raw_patch else {})
         # 只有工作流候选会自动发布；release 为空表示未尝试发布。
         published=result.get('release') or None
+        root,current=self.store.session(task['id'])
+        summary_task=current['id']
+        events=event_summary(self.store.directory(current['id'])/'events.jsonl',self.worker.redactor)
+        if not events['session_id'] and current['spec'].get('continuation_of'):
+            summary_task=current['spec']['continuation_of']
+            events=event_summary(self.store.directory(summary_task)/'events.jsonl',self.worker.redactor)
+        conversation={'root_task_id':root,'current_task_id':current['id'],
+                      'status':current['status'],'phase':current['phase'],
+                      'dsh_session_id':events['session_id'],
+                      'summary_task_id':summary_task,
+                      'queued_messages':len(self.store.inputs(current['id'])) if current['status']=='queued' else 0,
+                      'agent_summary':events['final'][-3000:], 'tool_calls':events['tool_calls'],
+                      'errors':events['event_errors']}
         return self.worker.redactor.value({
             'id':task['id'],'status':task['status'],'phase':task['phase'],'reason':task['reason'],
             'cancel_requested':task['cancel_requested'],'scope':task['spec'].get('scope','code_change'),
@@ -44,7 +58,8 @@ class Coordinator:
             'candidate_only':not (published and published['state']=='installed'),
             'candidate_discarded':bool(result.get('candidate_discarded')),
             'test_exit':result.get('test_exit'),'patch':patch,'release':published,
-            'error':result.get('error',''),'delivery':self.store.notification_state(task['id'])})
+            'error':result.get('error',''),'delivery':self.store.notification_state(task['id']),
+            'conversation':conversation})
 
     def owned(self, task_id, origin):
         task=self.store.get(task_id)
@@ -88,15 +103,30 @@ class Coordinator:
                     'delivery_nonce':item['claim_token'],'task':self.project(self.store.get(item['task_id']))}
         origin=self.authorize(request.get('origin'))
         if operation=='submit': return self.submit(origin,payload)
+        if operation=='message':
+            task=self.owned(payload.get('task_id'),origin)
+            message=text(payload.get('message'),'会话补充',8192)
+            root,_=self.store.session(task['id'])
+            key=hashlib.sha256(json.dumps(['message',root,origin['platform'],origin['session_id'],origin['message_id']]).encode()).hexdigest()
+            result=self.store.follow_up(task['id'],message,key,origin)
+            return {**self.project(result),'message_accepted':True,'message_queued':result['status']=='queued',
+                    'continuation_mode':'当前轮完成后继续同一 DSH 会话；不会即时打断正在执行的工具'}
         if operation=='list':
             tasks=[]
+            seen=set()
             for entry in self.store.list():
-                try: tasks.append(self.project(self.owned(entry['id'],origin)))
+                try:
+                    owned=self.owned(entry['id'],origin)
+                    root,current=self.store.session(owned['id'])
+                    if root in seen: continue
+                    seen.add(root)
+                    tasks.append(self.project(current))
+                    if len(tasks)==10: break
                 except PermissionError: pass
             return tasks[:10]
         if operation in ('status','cancel'):
             task=self.owned(payload.get('task_id'),origin)
-            if operation=='cancel': task=self.store.cancel(task['id'])
+            if operation=='cancel': task=self.store.cancel_session(task['id'])
             return self.project(task)
         if operation=='rollback':
             # 回退最近一次仍生效的自动发布；线上之后被改过时由 release 拒绝。

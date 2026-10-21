@@ -28,7 +28,8 @@ async def main():
                                     session_id='offline-development',user_id='1020050112')
     specs=await provider.list_tools(context)
     assert {spec.name for spec in specs}=={'learn_teaching','development_submit','development_status',
-                                           'development_cancel','development_rollback'}
+                                           'development_cancel','development_rollback','development_message'}
+    for spec in specs: spec.to_llm_definition()
     context.user_id='not-admin'; assert await provider.list_tools(context)==[]
     anchor=SimpleNamespace(message_id='fixture',message_info=SimpleNamespace(user_info=SimpleNamespace(user_id='1020050112')),
                            raw_message=SimpleNamespace(components=[TextComponent(text='以后搜索优先官方原文')]))
@@ -40,13 +41,18 @@ async def main():
     assert result.success
     assert provider.client.request.call_args.kwargs['origin']['message_id']=='fixture'
     assert provider.client.request.call_args.kwargs['origin']['text']=='以后搜索优先官方原文'
+    result=await provider.invoke(ToolInvocation(tool_name='development_message',arguments={
+        'task_id':'fixture','message':'继续同一会话'}),execution)
+    assert result.success
+    assert provider.client.request.call_args.args[0]=='message'
+    assert provider.client.request.call_args.kwargs['origin']['message_id']=='fixture'
     result=await provider.invoke(ToolInvocation(tool_name='development_submit',arguments={
         'scope':'persistent_workflow','instructions':'fixture','acceptance':'fixture','origin':{'user_id':'forged'}}),execution)
     assert not result.success
     if not args.stage:
         response=await DevelopmentClient().request('notifications',payload={'session_id':'offline-development-no-delivery'})
         assert response is None
-    print(json.dumps({'admin_tools':5,'non_admin_tools':0,'source_bound':True,
+    print(json.dumps({'admin_tools':6,'non_admin_tools':0,'source_bound':True,'conversation_message_bound':True,
                       'model_origin_rejected':True,'real_socket_checked':not args.stage}))
 
 

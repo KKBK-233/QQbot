@@ -144,6 +144,18 @@ class CoordinatorTests(unittest.TestCase):
                     writer.close(); await writer.wait_closed()
                     self.assertTrue(response['success'],response)
                     self.assertEqual(response['result']['status'],'queued')
+                    # 真实 socket 上补充运行中任务，必须快速受理并关联同一个开发会话。
+                    root=response['result']['id']; self.worker.store.claim()
+                    reader,writer=await asyncio.open_unix_connection(str(path))
+                    request=self.request('message',origin={**self.origin,'message_id':'follow-socket'},
+                                         payload={'task_id':root,'message':'补充验收，不重跑已完成步骤'})
+                    writer.write((json.dumps(request)+'\n').encode()); await writer.drain()
+                    response=json.loads(await asyncio.wait_for(reader.readline(),3))
+                    writer.close(); await writer.wait_closed()
+                    self.assertTrue(response['success'],response)
+                    self.assertEqual(response['result']['conversation']['root_task_id'],root)
+                    self.assertTrue(response['result']['message_queued'])
+                    self.assertNotEqual(response['result']['id'],root)
                 finally:
                     shutdown.set(); await asyncio.wait_for(service,5)
                 self.assertFalse(path.exists())

@@ -47,6 +47,11 @@ def completion_text(task):
     """完成通知只展示候选状态、补丁范围与独立测试，不输出模型自述。"""
     labels={'succeeded':'候选补丁已验证','failed':'开发未完成','timeout':'开发已超时','cancelled':'开发已取消'}
     lines=[f"开发任务 {task['id']}：{labels.get(task['status'],task['status'])}。"]
+    conversation=task.get('conversation') or {}
+    if conversation.get('root_task_id') and conversation['root_task_id']!=task['id']:
+        lines.append('所属开发会话：'+conversation['root_task_id'])
+    if conversation.get('queued_messages'):
+        lines.append('已有补充消息排队；本轮结果不代表后续轮次已执行。')
     patch=task.get('patch') or {}
     if patch.get('files'):
         lines.append('改动：'+'、'.join(patch['files'][:6]))

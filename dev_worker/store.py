@@ -67,6 +67,11 @@ class Store:
                 id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL,
                 state TEXT NOT NULL DEFAULT 'pending', claim_token TEXT, receipt TEXT,
                 created_at TEXT NOT NULL, sent_at TEXT)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS development_sessions (
+                root_task_id TEXT PRIMARY KEY, current_task_id TEXT NOT NULL)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS development_inputs (
+                request_key TEXT PRIMARY KEY, root_task_id TEXT NOT NULL,
+                task_id TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)''')
 
     @contextmanager
     def connect(self):
@@ -105,6 +110,65 @@ class Store:
         with self.connect() as db:
             row=db.execute('SELECT task_id FROM task_requests WHERE request_key=?',(request_key,)).fetchone()
         return self.get(row['task_id']) if row else None
+
+    def session(self, task_id):
+        """任务轮次共享一个稳定开发会话，旧终态和旧产物保持不变。"""
+        task = self.get(task_id)
+        root = task['spec'].get('session_root', task_id)
+        with self.connect() as db:
+            row = db.execute('SELECT current_task_id FROM development_sessions WHERE root_task_id=?', (root,)).fetchone()
+        return root, self.get(row['current_task_id'] if row else root)
+
+    def follow_up(self, task_id, content, request_key, origin):
+        """串行追加到待执行轮次；已运行的轮次不被中断，也不重新打开终态。"""
+        root, _ = self.session(task_id)
+        if not isinstance(content, str) or not content.strip() or len(content.encode('utf-8')) > 8192:
+            raise ValueError('会话补充必须为有界非空文本')
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            previous = db.execute('SELECT task_id FROM development_inputs WHERE request_key=?', (request_key,)).fetchone()
+            if previous:
+                selected = previous['task_id']
+            else:
+                db.execute('INSERT OR IGNORE INTO development_sessions VALUES(?,?)', (root, root))
+                current_id = db.execute('SELECT current_task_id FROM development_sessions WHERE root_task_id=?', (root,)).fetchone()[0]
+                row = db.execute('SELECT * FROM tasks WHERE id=?', (current_id,)).fetchone()
+                selected = current_id
+                if row['status'] != 'queued':
+                    selected = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:12]
+                    folder = self.directory(selected)
+                    spec = json.loads(row['spec'])
+                    spec.update(session_root=root, continuation_of=current_id, origin=origin,
+                                task='继续同一开发会话，沿用原目标、工作副本和已执行结果。')
+                    folder.mkdir(parents=True, mode=0o700)
+                    db.execute('INSERT INTO tasks(id,spec,status,phase,created_at) VALUES(?,?,?,?,?)',
+                               (selected, json.dumps(spec, ensure_ascii=False), 'queued', 'queued', now()))
+                    db.execute('UPDATE development_sessions SET current_task_id=? WHERE root_task_id=?', (selected, root))
+                count, size = db.execute('SELECT count(*),coalesce(sum(length(cast(content AS BLOB))),0) FROM development_inputs WHERE task_id=?', (selected,)).fetchone()
+                if count >= 8 or size + len(content.encode('utf-8')) > 32768:
+                    raise ValueError('本轮补充消息已达上限，请等待当前轮次完成')
+                db.execute('INSERT INTO development_inputs VALUES(?,?,?,?,?)', (request_key, root, selected, content, now()))
+        return self.get(selected)
+
+    def inputs(self, task_id):
+        with self.connect() as db:
+            rows = db.execute('SELECT content FROM development_inputs WHERE task_id=? ORDER BY created_at,rowid', (task_id,)).fetchall()
+        return [row['content'] for row in rows]
+
+    def cancel_session(self, task_id):
+        """会话取消覆盖正在执行及已排队的补充轮次，仍沿用既有进程回收。"""
+        root, _ = self.session(task_id)
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            latest = db.execute('SELECT current_task_id FROM development_sessions WHERE root_task_id=?', (root,)).fetchone()
+            current_id = latest[0] if latest else root
+            rows = db.execute("SELECT id,spec FROM tasks WHERE status IN ('queued','running')").fetchall()
+            for row in rows:
+                if row['id'] == root or json.loads(row['spec']).get('session_root') == root:
+                    db.execute("UPDATE tasks SET cancel_requested=1 WHERE id=?", (row['id'],))
+                    db.execute("UPDATE tasks SET status='cancelled',phase='done',reason='cancelled_before_start',finished_at=? WHERE id=? AND status='queued'",
+                               (now(),row['id']))
+        return self.get(current_id)
 
     def get(self, task_id):
         self.directory(task_id)

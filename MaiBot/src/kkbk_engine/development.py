@@ -47,8 +47,13 @@ class DevelopmentToolProvider:
                 'scope':{'type':'string','enum':['persistent_workflow','code_change']},
                 'instructions':{'type':'string','maxLength':8192},
                 'acceptance':{'type':'string','maxLength':4096}},['scope','instructions','acceptance']),
-            'development_status':('查询当前管理员在当前群的开发任务；省略 task_id 列出最近任务。',{
+            'development_status':('查询当前管理员在当前群的开发任务及 conversation 实际会话进度、代理总结、错误和工具调用计数；'
+                'summary_task_id 表示总结所属轮次。省略 task_id 列出最近任务。',{
                 'task_id':{'type':'string'}},[]),
+            'development_message':('向已有开发会话补充需求、回答问题或要求继续。沿用原目标、DSH 会话与工作副本，'
+                '当前轮结束后执行，不即时打断工具。先查 development_status 获取真实阶段和代理总结；'
+                '用同一目标的任务编号，不重新 submit。只有接口确认受理后才能说已补充。',{
+                'task_id':{'type':'string'},'message':{'type':'string','maxLength':4096}},['task_id','message']),
             'development_cancel':('取消当前管理员在当前群的指定开发任务，已完成的任务不回滚。',{
                 'task_id':{'type':'string'}},['task_id']),
             'development_rollback':('管理员明确要求撤销最近一次自动发布的工作流时调用，恢复发布前的线上版本；'
@@ -66,7 +71,7 @@ class DevelopmentToolProvider:
             args=invocation.arguments
             allowed={'learn_teaching':{'summary','keywords','source_message_ids'},
                      'development_submit':{'scope','instructions','acceptance'},
-                     'development_status':{'task_id'},'development_cancel':{'task_id'},
+                     'development_status':{'task_id'},'development_message':{'task_id','message'},'development_cancel':{'task_id'},
                      'development_rollback':set()}
             if invocation.tool_name not in allowed or set(args)-allowed[invocation.tool_name]:
                 raise ValueError('开发工具参数包含未开放字段')
@@ -75,7 +80,7 @@ class DevelopmentToolProvider:
                 return ToolExecutionResult(tool_name=invocation.tool_name,success=True,
                     content=json.dumps(result,ensure_ascii=False),structured_content=result,
                     metadata={'teaching_receipt':result['reply']})
-            operation={'development_submit':'submit','development_status':'status',
+            operation={'development_submit':'submit','development_status':'status','development_message':'message',
                        'development_cancel':'cancel','development_rollback':'rollback'}[invocation.tool_name]
             if operation=='status' and not args.get('task_id'): operation='list'
             result=await self.client.request(operation,origin=origin,payload=args)

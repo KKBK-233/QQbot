@@ -43,6 +43,49 @@ def test_completion_reports_release_outcome():
     assert '未发布：' in failed
 
 
+def test_continuation_receipt_distinguishes_round_and_queued_messages():
+    task={'id':'round-two','status':'succeeded','reason':'verified_patch','test_exit':0,
+          'conversation':{'root_task_id':'original-task','queued_messages':1}}
+    text=completion_text(task)
+    assert '所属开发会话：original-task' in text
+    assert '不代表后续轮次已执行' in text
+    assert '尚未发布' in text
+
+
+def test_development_message_tool_preserves_host_identity_and_has_no_session_override():
+    """执行真实提供器方法，验证续聊仍经过当前宿主来源而非模型伪造会话。"""
+    from pathlib import Path
+    from unittest.mock import AsyncMock
+    import ast
+    from src.kkbk_engine.config import EngineConfig
+    path=Path(__file__).resolve().parents[2]/'src/kkbk_engine/development.py'
+    klass=next(node for node in ast.parse(path.read_text(encoding='utf-8')).body if isinstance(node,ast.ClassDef))
+    client=SimpleNamespace(request=AsyncMock(return_value={'message_queued':True}))
+    ns={'json':json,'DevelopmentClient':lambda:client,'origin_from_context':origin_from_context,
+        'ToolSpec':lambda **kwargs:SimpleNamespace(**kwargs),
+        'ToolExecutionResult':lambda **kwargs:SimpleNamespace(**kwargs)}
+    exec(compile(ast.Module(body=[klass],type_ignores=[]),str(path),'exec'),ns)
+    provider=ns['DevelopmentToolProvider'](SimpleNamespace(config=EngineConfig()))
+    component=type('TextComponent',(),{})(); component.text='继续完善原任务'
+    context=SimpleNamespace(platform='qq',is_group_chat=True,group_id='1022382380',session_id='qq-session',
+        user_id='1020050112',metadata={'anchor_message':SimpleNamespace(message_id='actual-message',
+            message_info=SimpleNamespace(user_info=SimpleNamespace(user_id='1020050112')),
+            raw_message=SimpleNamespace(components=[component]))})
+    specs=asyncio.run(provider.list_tools(context))
+    spec=next(spec for spec in specs if spec.name=='development_message')
+    assert set(spec.parameters_schema['properties'])=={'task_id','message'}
+    invocation=SimpleNamespace(tool_name='development_message',arguments={'task_id':'old-task','message':'补齐验收'})
+    result=asyncio.run(provider.invoke(invocation,context))
+    assert result.success
+    assert client.request.await_args.args==('message',)
+    assert client.request.await_args.kwargs['origin']['message_id']=='actual-message'
+    invocation.arguments['session_id']='forged'
+    assert not asyncio.run(provider.invoke(invocation,context)).success
+    assert client.request.await_count==1
+    context.user_id='other-user'
+    assert asyncio.run(provider.list_tools(context))==[]
+
+
 @pytest.mark.skipif(__import__('sys').platform!='linux',reason='需要 Unix socket')
 def test_client_sends_source_outside_model_payload_and_reports_errors(tmp_path):
     async def scenario():

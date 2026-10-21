@@ -18,8 +18,14 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session'])
     args=parser.parse_args()
+    # 会话控制只更新开发工具与 worker，不连带发布检索候选或覆盖线上工作流。
+    if args.phase=='development-session':
+        names=['src/kkbk_engine/development.py','src/kkbk_engine/dev_protocol.py','src/kkbk_engine/prompt.py']
+        files=[(SOURCE/'MaiBot'/name,TARGET/name) for name in names]
+        files += [(p,DEV/'worker-code/dev_worker'/p.name) for p in (SOURCE/'dev_worker').glob('*.py')]
+        return install(args.phase,files)
     # 动作协议修复独立部署，避免连带发布尚未验收的运行时及检索候选。
     if args.phase=='action-protocol':
         names=['src/kkbk_engine/actions.py','src/kkbk_engine/prompt.py']

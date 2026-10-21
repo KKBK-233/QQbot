@@ -47,7 +47,7 @@ def main(argv=None):
             result=worker.submit(args.requester,raw.decode('utf-8-sig'),args.base_ref)
         elif args.command=='status':
             result=worker.store.get(args.task_id) if args.task_id else worker.store.list()
-        elif args.command=='cancel': result=worker.store.cancel(args.task_id)
+        elif args.command=='cancel': result=worker.store.cancel_session(args.task_id)
         elif args.command=='setup':
             with exclusive_lock(config.lock_path): result=setup_base(config,args.full)
         else:

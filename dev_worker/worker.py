@@ -79,6 +79,10 @@ class Worker:
         cfg=self.config
         task_id=task['id']
         folder=self.store.directory(task_id)
+        # 会话后续轮次使用同一源码、venv 和 DSH home；本轮产物另存，保留历史证据。
+        root_id=task['spec'].get('session_root',task_id)
+        workspace_folder=self.store.directory(root_id)
+        parent_id=task['spec'].get('continuation_of')
         started=time.monotonic()
         result={'base_commit':task['spec']['base_commit'],'agent_exit':None,'test_exit':None,
                 'patch':None,'events':{},'durations':{},'artifacts':{}}
@@ -90,29 +94,52 @@ class Worker:
         try:
             if str(cfg.source_repo.resolve())!=task['spec']['source_repo']:
                 raise ValueError('任务提交后源码仓库路径发生变化')
-            for phase,operation in [
+            for phase,operation in ([] if parent_id else [
                 ('clone',lambda:prepare_clone(cfg,folder,task['spec']['base_commit'],cancelled)),
-                ('environment',lambda:prepare_environment(cfg,folder,cancelled))]:
+                ('environment',lambda:prepare_environment(cfg,folder,cancelled))]):
                 self.store.phase(task_id,phase)
                 before=time.monotonic(); operation()
                 result['durations'][phase]=round(time.monotonic()-before,3)
             # 工作流候选以线上当前工作流为基线，补丁只含代理在此之上的改动。
             base=task['spec']['base_commit']
             publishing=task['spec'].get('scope')=='persistent_workflow' and cfg.auto_release
-            if publishing:
+            session_id=None
+            if parent_id:
+                parent=self.store.get(parent_id)
+                if parent['status'] not in ('succeeded','failed','timeout','cancelled'):
+                    raise RuntimeError('前一开发轮次尚未结束')
+                previous=event_summary(self.store.directory(parent_id)/'events.jsonl',self.redactor)
+                session_id=previous['session_id']
+                if not session_id or not (workspace_folder/'ws').is_dir():
+                    raise RuntimeError('缺少可继续的 DSH 会话或工作副本，未重新执行原任务')
+                root=self.store.get(root_id)
+                base=root['result'].get('workflow_base_commit',base)
+                if publishing:
+                    # 保留既有副本，不以同步线上目录覆盖代理产物；基线不一致时明确阻塞。
+                    baseline=release.tree(cfg.live_workflows)
+                    if release.tree(workspace_folder/'ws/workflows')!=baseline:
+                        raise RuntimeError('工作流副本与线上不一致，需先协调候选与发布基线')
+                result.update(session_root=root_id,continuation_of=parent_id)
+            elif publishing:
                 self.store.phase(task_id,'sync')
                 baseline,base=release.sync_workspace(cfg,folder,cancelled)
                 result['workflow_base_commit']=base
             self.store.phase(task_id,'agent')
-            response=run_process(agent_command(cfg,folder,task['spec']['task']),cwd=folder/'ws',
-                env=agent_env(cfg,folder),stdout=folder/'events.jsonl',stderr=folder/'stderr.log',
+            additions=self.store.inputs(task_id)
+            prompt=task['spec']['task']+''.join('\n\n【协调者补充】\n'+item for item in additions)
+            command=(agent_command(cfg,workspace_folder,prompt,session_id=session_id) if parent_id
+                     else agent_command(cfg,workspace_folder,prompt))
+            response=run_process(command,cwd=workspace_folder/'ws',
+                env=agent_env(cfg,workspace_folder),stdout=folder/'events.jsonl',stderr=folder/'stderr.log',
                 timeout=cfg.agent_timeout_sec,cancel=cancelled,max_bytes=cfg.max_log_bytes,
                 idle_timeout=cfg.effective_agent_idle_timeout_sec)
             result['agent_exit']=response.exit_code
             result['durations']['agent']=round(response.seconds,3)
             result['events']=event_summary(folder/'events.jsonl',self.redactor)
+            if session_id and result['events']['session_id']!=session_id:
+                raise RuntimeError('DSH 未继续指定会话，停止收集与发布')
             self.store.phase(task_id,'collect')
-            patch=collect_patch(cfg,folder,base,cancelled)
+            patch=collect_patch(cfg,workspace_folder,base,cancelled,artifact_folder=folder)
             result['patch']=patch
             if task['spec'].get('scope')=='persistent_workflow' and any(
                     not name.startswith(('workflows/','pytests/kkbk_engine/')) for name in patch['files']):
@@ -120,13 +147,13 @@ class Worker:
             if patch['bytes']:
                 self.store.phase(task_id,'test')
                 test_cfg=replace(cfg,test_command=task['spec']['test_command'])
-                response=run_process(test_command(test_cfg,folder),cwd=folder/'ws',env=agent_env(cfg,folder),
+                response=run_process(test_command(test_cfg,workspace_folder),cwd=workspace_folder/'ws',env=agent_env(cfg,workspace_folder),
                     stdout=folder/'test.log',stderr=folder/'test.err',timeout=cfg.test_timeout_sec,
                     cancel=cancelled,max_bytes=cfg.max_log_bytes)
                 result['test_exit']=response.exit_code
                 result['durations']['test']=round(response.seconds,3)
                 # 测试产生的实际源码变化也必须披露，不能把测试前补丁当作最终版本。
-                after=collect_patch(cfg,folder,base,cancelled)
+                after=collect_patch(cfg,workspace_folder,base,cancelled,artifact_folder=folder)
                 result['patch']=after
                 if after['sha256']!=patch['sha256']:
                     raise RuntimeError('workspace_changed_during_tests')
@@ -134,7 +161,7 @@ class Worker:
             # 发布结果单独记录：候选本身已验证，发布失败不改写任务结论。
             if publishing and status=='succeeded':
                 self.store.phase(task_id,'release')
-                result['release']=release.publish(cfg,task_id=task_id,workspace=folder/'ws',
+                result['release']=release.publish(cfg,task_id=task_id,workspace=workspace_folder/'ws',
                                                   files=result['patch']['files'],baseline=baseline)
         except Stopped as exc:
             reason=exc.reason
