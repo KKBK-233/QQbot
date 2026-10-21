@@ -525,8 +525,12 @@ class ComponentQueryService:
                 "matched_groups": matched_groups if isinstance(matched_groups, dict) else {},
             }
             if message is not None:
+                # 普通命令不需要图片字节；明确声明 include_binary_data 的命令才传输原图。
                 invoke_args["message"] = dict(
-                    PluginMessageUtils._session_message_to_dict(message, include_binary_data=False)
+                    PluginMessageUtils._session_message_to_dict(
+                        message,
+                        include_binary_data=bool(metadata.get("include_binary_data", False)),
+                    )
                 )
             if isinstance(plugin_config, dict):
                 invoke_args["plugin_config"] = plugin_config
@@ -770,6 +774,21 @@ class ComponentQueryService:
             payload["group_id"] = anchor_group_id
         if anchor_user_id:
             payload["user_id"] = anchor_user_id
+
+        # 图片/引用类插件工具需要在不暴露模型参数的前提下定位原图。
+        anchor_message_id = str(getattr(anchor_message, "message_id", "") or "").strip()
+        if anchor_message_id:
+            payload["anchor_message_id"] = anchor_message_id
+        reply_to_message_id = str(getattr(anchor_message, "reply_to", "") or "").strip()
+        if not reply_to_message_id:
+            raw_message = getattr(anchor_message, "raw_message", None)
+            for component in getattr(raw_message, "components", ()) or ():
+                candidate = str(getattr(component, "target_message_id", "") or "").strip()
+                if candidate:
+                    reply_to_message_id = candidate
+                    break
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = reply_to_message_id
         return payload
 
     @staticmethod
@@ -808,6 +827,13 @@ class ComponentQueryService:
 
         payload = dict(invocation.arguments)
         context_payload = ComponentQueryService._build_tool_context_payload(context)
+        # 沙箱配额身份只信任宿主，不接受模型传入的保留字段。
+        if entry.plugin_id == "local.qqbot-python-sandbox":
+            for key in ("_sandbox_trusted_context", "stream_id", "chat_id", "user_id", "group_id", "platform"):
+                payload.pop(key, None)
+            payload.update(context_payload)
+            payload["_sandbox_trusted_context"] = bool(context_payload.get("stream_id"))
+            return payload
         if entry.invoke_method == "plugin.invoke_action":
             stream_id = str(
                 context_payload.get("stream_id")
@@ -828,6 +854,10 @@ class ComponentQueryService:
         for key, value in context_payload.items():
             if key not in payload or not payload.get(key):
                 payload[key] = value
+        # 消息定位必须由宿主绑定，不能由模型参数覆盖。
+        for key in ("anchor_message_id", "reply_to_message_id"):
+            if key in context_payload:
+                payload[key] = context_payload[key]
         return payload
 
     @staticmethod

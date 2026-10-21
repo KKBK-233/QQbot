@@ -67,7 +67,18 @@ class ToolExecutionMixin:
                     )
                     return result
         # 工具参数中的会话或身份不能覆盖宿主的真实来源。
-        reserved = {"stream_id", "chat_id", "session_id", "user_id", "group_id", "platform", "_sandbox_trusted_context"}
+        # 消息定位由宿主按触发消息注入，模型不能指定其他消息的原图。
+        reserved = {
+            "stream_id",
+            "chat_id",
+            "session_id",
+            "user_id",
+            "group_id",
+            "platform",
+            "anchor_message_id",
+            "reply_to_message_id",
+            "_sandbox_trusted_context",
+        }
         args = {key: value for key, value in call.args.items() if key not in reserved}
         invocation = ToolInvocation(
             tool_name=call.func_name,

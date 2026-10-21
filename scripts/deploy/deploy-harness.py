@@ -18,8 +18,23 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session','development-cross-group','engine-review'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session','development-cross-group','engine-review','image-search','image-search-sdk-fix'])
     args=parser.parse_args()
+    # SDK 取图修复只更新插件读取逻辑、版本和说明，保留压缩配置与宿主接线。
+    if args.phase=='image-search-sdk-fix':
+        names=['plugin.py','_manifest.json','CHANGELOG.md']
+        return install(args.phase,[(SOURCE/'MaiBot/plugins/image_reverse_search'/name,
+                                   TARGET/'plugins/image_reverse_search'/name) for name in names])
+    # 图片反查：插件整目录（不含 git 与缓存）、引擎接线，以及开发服务的提前压缩配置。
+    if args.phase=='image-search':
+        names=['src/kkbk_engine/config.py','src/kkbk_engine/prompt.py','src/kkbk_engine/tool_execution.py',
+               'src/kkbk_engine/development.py','src/plugin_runtime/component_query.py']
+        files=[(SOURCE/'MaiBot'/name,TARGET/name) for name in names]
+        plugin=SOURCE/'MaiBot/plugins/image_reverse_search'
+        files+=[(p,TARGET/p.relative_to(SOURCE/'MaiBot')) for p in sorted(plugin.rglob('*'))
+                if p.is_file() and not {'.git','__pycache__','.pytest_cache'}&set(p.relative_to(plugin).parts)]
+        files+=[(SOURCE/'dev_worker'/name,DEV/'worker-code/dev_worker'/name) for name in ('config.py','workspace.py')]
+        return install(args.phase,files)
     # 跨群控制只更新权限、通知归属和工具说明，不覆盖引擎或工作流候选。
     if args.phase=='development-cross-group':
         names=['src/kkbk_engine/development.py','src/kkbk_engine/prompt.py']

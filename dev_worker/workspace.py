@@ -13,6 +13,8 @@ import threading
 from .process import run_process
 
 TASK_VENV_MOUNT = '.dev-worker-venv'
+# dsh-llm-deepseek 的 DEFAULT_CONTEXT_WINDOW；压缩阈值按它换算成比例。
+DEEPSEEK_CONTEXT_WINDOW = 1_000_000
 _GIT_CONFIG_LOCK = threading.Lock()
 
 
@@ -122,7 +124,11 @@ def prepare_environment(config, folder, cancel):
         (home/name).mkdir(mode=0o700)
     (home/'.env').touch(mode=0o600)
     patch=folder/'dsh-patch.yml'
-    patch.write_text(f'- id: bash-sandbox\n  config:\n    timeoutMs: {config.bash_timeout_ms}\n',encoding='utf-8')
+    # DeepSeek 声明 1M 窗口，默认 80% 才压缩，长会话每步重带几十万旧上下文；按绝对阈值提前压缩。
+    ratio=config.compact_threshold_tokens/DEEPSEEK_CONTEXT_WINDOW
+    patch.write_text(f'- id: bash-sandbox\n  config:\n    timeoutMs: {config.bash_timeout_ms}\n'
+                     f'- id: compaction-basic\n  config:\n    thresholdRatio: {ratio:.4f}\n'
+                     f'    retainTokens: {config.compact_retain_tokens}\n    maxTokens: 8192\n',encoding='utf-8')
 
 def agent_env(config,folder):
     """最小环境不导出空密钥，DSH 在隔离环境读取专用凭据文件。"""
@@ -168,7 +174,11 @@ def developer_prompt(task):
             '需要新增执行能力时补齐代码与接线，不用一份文字规则代替实现。'
             '在授权目标内持续修复并逐项验收；缺少信息时明确提出问题，等待协调者在同一会话补充。'
             '只处理本任务，不访问生产、其他工作区或凭据，不提交、推送或部署。'
-            '测试使用当前 VIRTUAL_ENV 的 Python。最后说明改动、测试和未完成事项。\n\n'+task)
+            '测试使用当前 VIRTUAL_ENV 的 Python。最后说明改动、测试和未完成事项。'
+            # 实测续跑轮次大量步骤花在探查端口、socket 和重读已读代码上，每步都重带全部上下文。
+            '控制步数：先定位再修改，不重复读取已读过且未改动的文件，测试先跑目标文件再跑全量。'
+            '任务所需的接口、服务或凭据在工作副本内找不到时，直接在答复中说明缺什么并结束本轮，'
+            '不要扫描端口、进程、socket 或开发目录去寻找替代入口。\n\n'+task)
 
 def agent_command(config,folder,task,session_id=None):
     command=[config.dsh_bin,'--profile','headless','--patch',folder/'dsh-patch.yml',

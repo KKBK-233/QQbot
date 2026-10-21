@@ -115,5 +115,7 @@ class EngineConfig:
     forward: ForwardLimits = field(default_factory=ForwardLimits)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     task: TaskBudget = field(default_factory=TaskBudget)
-    plugin_tools: FrozenSet[str] = frozenset({"chatgpt_image", "web_search", "read_webpage", "analyze_task_image"})
+    plugin_tools: FrozenSet[str] = frozenset(
+        {"chatgpt_image", "web_search", "read_webpage", "analyze_task_image", "image_reverse_search"}
+    )
     """交给任务层的插件工具，同时沿用既有插件工具限流。"""

@@ -1,0 +1,51 @@
+# 图片反查插件配置
+# SauceNAO / trace.moe 的 key 也可以放在环境变量中，避免写入配置文件。
+# 默认读取 SAUCENAO_API_KEY 与 TRACE_MOE_API_KEY。
+
+[plugin]
+enabled = true
+config_version = "1.0.1"
+group_only = true
+
+[search]
+# illustration：二次元插画；anime：番剧截图
+default_mode = "illustration"
+# 命中阈值，达到后立即停止，不再调用后续引擎
+hit_threshold = 80.0
+# 每个引擎独立超时（秒）
+engine_timeout = 15.0
+# 全部不中时最多展示多少条低分候选
+max_low_results = 5
+# ascii2d 不返回相似度，用该隐式分数参与命中判断（展示仍标注为未知）
+ascii2d_implicit_score = 85.0
+# 允许搜索的最大图片大小（MB）
+max_image_mb = 10.0
+
+# 二次元插画默认顺序；ascii2d 内部会同时尝试色街模式与 bovw 特征模式
+illustration_engines = ["saucenao", "ascii2d", "iqdb"]
+# 番剧截图默认顺序
+anime_engines = ["tracemoe", "saucenao", "ascii2d", "iqdb"]
+
+# 可选：按引擎覆盖超时时间
+# [search.engine_timeouts]
+# saucenao = 8.0
+
+[saucenao]
+# 留空则读取环境变量 SAUCENAO_API_KEY；仍然没有 key 时该来源会被标记“缺 key 跳过”，
+# 不阻塞 ascii2d / IQDB 等无需 key 的来源。
+api_key = ""
+api_key_env = "SAUCENAO_API_KEY"
+numres = 10
+hide = 0
+min_similarity = 0.0
+
+[tracemoe]
+# 留空则读取环境变量 TRACE_MOE_API_KEY；trace.moe 不强制要求 key
+api_key = ""
+api_key_env = "TRACE_MOE_API_KEY"
+mute = false
+
+[network]
+# 例如 "http://127.0.0.1:7890"；留空表示直连
+proxies = ""
+verify_ssl = true

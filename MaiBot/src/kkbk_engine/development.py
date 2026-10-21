@@ -41,7 +41,8 @@ class DevelopmentToolProvider:
             'development_submit':('管理员的教学需要改工作流执行或源码/插件时，提交异步开发候选。'
                 '由你判断需要的作用范围，不要求原话出现“以后”或“开发”等口令。'
                 '仅本次的指导使用普通任务工具，不提交开发。scope=持久工作流或代码修改；'
-                '持久工作流候选通过测试后由宿主自动发布，代码修改只保留候选；'
+                '持久工作流候选通过测试后由宿主自动发布，代码修改只保留候选、由维护端部署；'
+                '管理员要求发布代码候选时直接说明需维护端部署，不要用 development_message 让开发代理去发布；'
                 '同一原始消息重复调用返回同一任务。',{
                 'scope':{'type':'string','enum':['persistent_workflow','code_change']},
                 'instructions':{'type':'string','maxLength':8192},

@@ -1,0 +1,44 @@
+{
+  "manifest_version": 2,
+  "version": "1.0.2",
+  "name": "群内图片反查",
+  "description": "基于 PicImageSearch 的多引擎图片反查插件，按 SauceNAO → ascii2d → IQDB 回退，番剧截图优先 trace.moe",
+  "author": {
+    "name": "MaiBot开发团队",
+    "url": "https://github.com/MaiM-with-u"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/MaiM-with-u/maibot",
+    "homepage": "https://github.com/kitUIN/PicImageSearch",
+    "documentation": "https://github.com/kitUIN/PicImageSearch",
+    "issues": "https://github.com/MaiM-with-u/maibot/issues"
+  },
+  "changelog": "CHANGELOG.md",
+  "host_application": {
+    "min_version": "1.3.0",
+    "max_version": "1.3.99"
+  },
+  "sdk": {
+    "min_version": "2.8.2",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "send.text",
+    "message.get_by_id"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "display": {
+    "icon": {
+      "type": "lucide",
+      "value": "image-search"
+    }
+  },
+  "id": "maibot-team.image-reverse-search"
+}

@@ -87,6 +87,9 @@ class WorkerConfig:
     max_log_bytes: int = 8 * 1024 * 1024
     max_patch_bytes: int = 4 * 1024 * 1024
     agent_idle_timeout_sec: int = 300
+    # 会话上下文超过该 token 数即压缩；保留最近若干 token 原文，其余改为摘要。
+    compact_threshold_tokens: int = 128_000
+    compact_retain_tokens: int = 32_000
     # 线上工作流目录与加载器；为 None 时不同步线上基线，也不自动发布。
     live_workflows: Path | None = None
     live_loader: Path | None = None
@@ -161,6 +164,8 @@ class WorkerConfig:
             raise ValueError('base_ref 不能为空或包含换行')
         if not self.allowed_requesters:
             raise ValueError('管理员名单不能为空')
+        if not 0 < self.compact_retain_tokens < self.compact_threshold_tokens < 1_000_000:
+            raise ValueError('压缩阈值须满足 0 < 保留 < 阈值 < 上下文窗口')
 
     def requirements_path(self) -> Path:
         return self.source_repo / "requirements.txt"
@@ -191,6 +196,8 @@ class WorkerConfig:
             max_log_bytes=_env_int(env, "MAX_LOG_BYTES", 8 * 1024 * 1024),
             max_patch_bytes=_env_int(env, "MAX_PATCH_BYTES", 4 * 1024 * 1024),
             agent_idle_timeout_sec=_env_int(env, "AGENT_IDLE_TIMEOUT", 300),
+            compact_threshold_tokens=_env_int(env, "COMPACT_THRESHOLD_TOKENS", 128_000),
+            compact_retain_tokens=_env_int(env, "COMPACT_RETAIN_TOKENS", 32_000),
             live_workflows=_env_path(env, "LIVE_WORKFLOWS", DEFAULT_LIVE_WORKFLOWS),
             live_loader=_env_path(env, "LIVE_LOADER", DEFAULT_LIVE_LOADER),
         )

@@ -73,3 +73,12 @@ QQ / SnowLuma → MaiBot 基础设施
 - [状态表](status.md)：源码、测试、部署、真实验收分别记录。
 - [CHANGELOG](CHANGELOG.md)：历史交付与发布证据，旧结论只描述当时状态。
 - [本轮审阅结论](review-findings.md)：逐项判断及本轮修改边界。
+
+### 图片反查上线与开发层降耗
+
+- 搜图开发会话 20261021T034513Z-25a053611de2 共 6 轮：候选在第 4 轮已通过（202 项），第 5、6 轮代理被要求“发布”，但代码候选没有发布入口，代理花 35 步扫描端口、socket 和开发目录寻找发布接口，单轮约 850 万缓存输入后报告无法发布。两次 agent_failed 为 DeepSeek 传输失败。
+- 候选基于旧基线 29c2020，runtime.py 在 1.7.0 拆分后无法直接应用；维护端手工移植：插件白名单改到 EngineConfig.plugin_tools，消息定位保留字段改到 tool_execution.py，提示词规则一条，宿主 component_query 注入 anchor/reply 消息编号。插件另建独立仓库 plugins/image_reverse_search。依赖 PicImageSearch 原先在本地与线上 venv 均未安装，插件测试全为替身。
+- Token 来源：dsh-llm-deepseek 声明 1M 上下文窗口，compaction-basic 默认 80% 才压缩，开发会话最高约 43 万 token 从未触发压缩，每步重带全部历史。现在每个任务的 dsh-patch.yml 设置 128k token 压缩阈值、保留最近 32k 原文（可用 COMPACT_THRESHOLD_TOKENS / COMPACT_RETAIN_TOKENS 调整），并经 dsh --dump-config 确认生效。
+- 开发提示词要求先定位后修改、不重复读已读文件、测试先跑目标文件；缺少接口或凭据时直接说明并结束，不扫描端口、进程或 socket。development_submit 说明代码候选由维护端部署，不用续聊让代理去发布。
+- 线上 component_query.py 原有一段未入库的沙箱身份隔离代码，已先收录进 MaiBot 1.7.4，部署不会抹掉。
+- 部署：deploy-harness.py image-search，复制引擎 5 个文件、插件目录和 dev_worker 两个文件；线上 venv 安装 PicImageSearch；重启 MaiBot 与 dev-worker。
