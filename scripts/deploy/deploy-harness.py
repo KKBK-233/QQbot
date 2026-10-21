@@ -18,8 +18,13 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter'])
     args=parser.parse_args()
+    # 适配器入站媒体预算只改适配器两个文件，不连带更新引擎运行时。
+    if args.phase=='snowluma-adapter':
+        adapter='plugins/MaiBot-SnowLuma-Adapter/codecs/inbound/'
+        names=[adapter+'message_codec.py',adapter+'cards.py']
+        return install(args.phase,[(SOURCE/'MaiBot'/name,TARGET/name) for name in names])
     # 运行时的直接依赖一起更新，避免只复制 runtime 后与旧预算或工具协议不兼容。
     names=['src/kkbk_engine/runtime.py','src/kkbk_engine/workflows.py','src/kkbk_engine/config.py',
            'src/kkbk_engine/builtin_tools.py','src/kkbk_engine/guards.py','src/kkbk_engine/search_evidence.py',
@@ -36,6 +41,10 @@ def main():
                   for p in (SOURCE/'MaiBot/workflows').rglob('*.json')]
     elif args.phase=='development':
         files += [(p,DEV/'worker-code/dev_worker'/p.name) for p in (SOURCE/'dev_worker').glob('*.py')]
+    install(args.phase,files)
+
+
+def install(phase,files):
     stamp=time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())+'-'+str(os.getpid())
     release=DEV/'releases'/stamp
     release.mkdir(parents=True,exist_ok=False,mode=0o700)
@@ -50,7 +59,7 @@ def main():
         records.append({'source':str(source),'target':str(target),'before':old,
                         'after':hashlib.sha256(raw).hexdigest(),'index':index})
     assert all(sha(Path(item['target']))==item['before'] for item in records),'线上文件发生变化'
-    manifest={'phase':args.phase,'files':records,'state':'prepared'}
+    manifest={'phase':phase,'files':records,'state':'prepared'}
     (release/'manifest.json').write_text(json.dumps(manifest,indent=2))
     for item in records:
         target=Path(item['target']); target.parent.mkdir(parents=True,exist_ok=True)
@@ -60,7 +69,7 @@ def main():
         assert sha(target)==item['after']
     manifest['state']='installed'
     (release/'manifest.json').write_text(json.dumps(manifest,indent=2))
-    print(json.dumps({'phase':args.phase,'release':str(release),'files':len(records)}))
+    print(json.dumps({'phase':phase,'release':str(release),'files':len(records)}))
 
 
 if __name__=='__main__': main()

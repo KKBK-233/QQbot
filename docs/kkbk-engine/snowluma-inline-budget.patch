@@ -1,0 +1,166 @@
+diff --git a/codecs/inbound/cards.py b/codecs/inbound/cards.py
+index 10a0e20..fe54353 100644
+--- a/codecs/inbound/cards.py
++++ b/codecs/inbound/cards.py
+@@ -27,6 +27,9 @@ class QQInboundCardMixin:
+         @staticmethod
+         def _encode_binary(binary_data: bytes) -> str: ...
+ 
++        @staticmethod
++        def _take_inline_budget(size: int) -> bool: ...
++
+     async def _build_json_segments(
+         self,
+         segment_data: Mapping[str, Any],
+@@ -244,6 +247,9 @@ class QQInboundCardMixin:
+         binary_data = await self._query_service.download_binary(normalized_url)
+         if not binary_data:
+             return None
++        # 卡片预览图是附带内容，超出单条消息媒体预算时直接省略。
++        if not self._take_inline_budget(len(binary_data)):
++            return None
+ 
+         return {
+             "type": "image",
+diff --git a/codecs/inbound/message_codec.py b/codecs/inbound/message_codec.py
+index 9b8b232..b435ceb 100644
+--- a/codecs/inbound/message_codec.py
++++ b/codecs/inbound/message_codec.py
+@@ -3,12 +3,14 @@
+ from __future__ import annotations
+ 
+ from binascii import Error as BinasciiError
++from contextvars import ContextVar
+ from pathlib import Path
+ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+ from uuid import uuid4
+ 
+ import base64
+ import hashlib
++import json
+ import time
+ 
+ from ...qq_face_map import QQ_FACE_DESCRIPTIONS, QQ_FACE_EMOJIS
+@@ -19,6 +21,15 @@ from ..notice.helpers import normalize_optional_string
+ from .cards import QQInboundCardMixin
+ from .text import QQInboundTextMixin
+ 
++# 插件与 Host 的 IPC 单帧上限为 16 MiB（src/plugin_runtime/transport/base.py）。
++# 单条消息内嵌的媒体原始字节累计不超过 8 MiB，Base64 后约 10.7 MiB，为文本和信封留出余量。
++INLINE_MEDIA_BUDGET_BYTES = 8 * 1024 * 1024
++# 序列化后仍超过该值时去掉全部内嵌媒体，只保留文字与占位，避免整条消息发送失败。
++MAX_MESSAGE_JSON_BYTES = 14 * 1024 * 1024
++OVER_BUDGET_DESCRIPTION = "[原图未内嵌：本条消息图片总量超过单条上限]"
++
++# 每条入站消息一个预算；同一编码器会被并发的后台任务共用，所以不能放在实例属性上。
++_inline_budget: ContextVar[Optional[Dict[str, int]]] = ContextVar("snowluma_inline_budget", default=None)
+ 
+ 
+ class QQInboundCodec(QQInboundCardMixin, QQInboundTextMixin):
+@@ -75,7 +86,17 @@ class QQInboundCodec(QQInboundCardMixin, QQInboundTextMixin):
+         user_nickname = str(sender.get("nickname") or sender.get("card") or sender_user_id).strip() or sender_user_id
+         user_cardname = str(sender.get("card") or "").strip() or None
+ 
+-        raw_message, is_at, platform_card_payloads = await self.convert_segments_with_metadata(payload, self_id)
++        budget = {"remaining": INLINE_MEDIA_BUDGET_BYTES, "skipped": 0}
++        budget_token = _inline_budget.set(budget)
++        try:
++            raw_message, is_at, platform_card_payloads = await self.convert_segments_with_metadata(payload, self_id)
++        finally:
++            _inline_budget.reset(budget_token)
++        if budget["skipped"]:
++            self._logger.warning(
++                f"入站消息媒体超过单条内嵌预算，{budget['skipped']} 个媒体未内嵌原图: "
++                f"message_id={payload.get('message_id')}"
++            )
+         if not raw_message:
+             raw_message = [self._build_text_segment("[unsupported]")]
+ 
+@@ -116,7 +137,7 @@ class QQInboundCodec(QQInboundCardMixin, QQInboundTextMixin):
+             isinstance(segment, Mapping) and str(segment.get("type") or "") in {"image", "picture"}
+             for segment in raw_message
+         )
+-        return {
++        message_dict = {
+             "message_id": message_id,
+             "timestamp": str(float(timestamp_seconds)),
+             "platform": "qq",
+@@ -132,6 +153,47 @@ class QQInboundCodec(QQInboundCardMixin, QQInboundTextMixin):
+             "processed_plain_text": plain_text,
+             "display_message": plain_text,
+         }
++        # 预算只计媒体；超长文本或卡片仍可能撑破单帧，此时去掉全部内嵌媒体并明确记录。
++        encoded_size = len(json.dumps(message_dict, ensure_ascii=False).encode("utf-8"))
++        if encoded_size > MAX_MESSAGE_JSON_BYTES:
++            stripped = self._strip_inline_media(raw_message)
++            self._logger.warning(
++                f"入站消息序列化后 {encoded_size} 字节超过 {MAX_MESSAGE_JSON_BYTES}，"
++                f"已去掉 {stripped} 个内嵌媒体: message_id={message_id}"
++            )
++        return message_dict
++
++    def _strip_inline_media(self, segments: Any) -> int:
++        """递归去掉消息段（含转发节点）中的内嵌媒体字节，保留 hash 与占位描述。"""
++        stripped = 0
++        for segment in segments if isinstance(segments, list) else []:
++            if not isinstance(segment, dict):
++                continue
++            if segment.pop("binary_data_base64", None):
++                stripped += 1
++                # 语音没有可回读的图片库，去掉字节后改为占位文本；图片保留 hash 与序号。
++                if segment.get("type") == "voice":
++                    segment.clear()
++                    segment.update(self._build_text_segment("[voice]"))
++                else:
++                    segment["data"] = segment.get("data") or OVER_BUDGET_DESCRIPTION
++            if segment.get("type") == "forward" and isinstance(segment.get("data"), list):
++                for node in segment["data"]:
++                    if isinstance(node, dict):
++                        stripped += self._strip_inline_media(node.get("content"))
++        return stripped
++
++    @staticmethod
++    def _take_inline_budget(size: int) -> bool:
++        """从当前消息的媒体预算中扣除；预算不足返回 False。未处于消息构造流程时不限制。"""
++        budget = _inline_budget.get()
++        if budget is None:
++            return True
++        if size > budget["remaining"]:
++            budget["skipped"] += 1
++            return False
++        budget["remaining"] -= size
++        return True
+ 
+     async def convert_segments(self, payload: QQPayload, self_id: str) -> Tuple[QQSegments, bool]:
+         """将 OneBot 消息段转换为 Host 消息段结构。
+@@ -491,12 +553,17 @@ class QQInboundCodec(QQInboundCardMixin, QQInboundTextMixin):
+         if not binary_data:
+             return self._build_text_segment("[emoji]" if actual_is_emoji else "[image]")
+ 
+-        return {
++        segment: QQSegment = {
+             "type": "emoji" if actual_is_emoji else "image",
+             "data": "",
+             "hash": hashlib.sha256(binary_data).hexdigest(),
+-            "binary_data_base64": self._encode_binary(binary_data),
+         }
++        # 超出预算的图片仍占原序号，只是不带原图字节；选读时会明确报告字节缺失。
++        if self._take_inline_budget(len(binary_data)):
++            segment["binary_data_base64"] = self._encode_binary(binary_data)
++        else:
++            segment["data"] = OVER_BUDGET_DESCRIPTION
++        return segment
+ 
+     async def _build_record_segment(self, segment_data: Mapping[str, Any]) -> QQSegment:
+         """构造语音消息段。
+@@ -547,6 +614,10 @@ class QQInboundCodec(QQInboundCardMixin, QQInboundTextMixin):
+                 )
+                 return self._build_text_segment("[voice]")
+ 
++        # 语音没有可回读的图片库，超预算时直接退为占位文本。
++        if not self._take_inline_budget(len(binary_data)):
++            return self._build_text_segment("[voice]")
++
+         return {
+             "type": "voice",
+             "data": "",
