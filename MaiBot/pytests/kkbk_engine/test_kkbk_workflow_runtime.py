@@ -1,5 +1,6 @@
 """离线执行真实运行时方法，隔离宿主登录、数据库、模型网络及发送服务。"""
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -21,6 +22,30 @@ from src.kkbk_engine.workflows import build_workflow_guidance, load_workflow_sna
 from test_kkbk_workflows import setup_files
 
 
+def configure_runtime(runtime, root):
+    """给编译出的运行时实例补齐离线依赖；类级工具限速器保持真实共享范围。"""
+    runtime.session_id = "offline-session"
+    runtime.log_prefix = "offline"
+    runtime.config = EngineConfig()
+    runtime._anchor = lambda look: None
+    runtime._availability = lambda anchor: None
+    specs = [SimpleNamespace(name=name, provider_type="plugin", to_llm_definition=lambda: {})
+             for name in ["web_search", "read_webpage"]]
+    runtime._registry = SimpleNamespace(list_tools=AsyncMock(return_value=specs))
+    runtime._prepare = AsyncMock(side_effect=lambda *_: [SimpleNamespace(role="system", text="原有人设"),
+                                                       SimpleNamespace(role="user", text="原始问题")])
+    runtime.history = SimpleNamespace(quotable=lambda: {})
+    runtime.gate = SimpleNamespace(complete=Mock())
+    runtime._send = AsyncMock()
+    runtime._after_turn = AsyncMock()
+    runtime._llm = SimpleNamespace(generate_response_with_context=AsyncMock())
+    runtime._tool_llm = SimpleNamespace(generate_response_with_context=AsyncMock())
+    runtime._invoke = AsyncMock()
+    runtime._tool_gates = {}
+    runtime.chat_stream = SimpleNamespace(platform="qq", group_id="offline-group")
+    return runtime
+
+
 def runtime_harness(root):
     # 直接编译生产方法，避免导入 runtime 时启动宿主配置/日志等全局设施。
     path = Path(__file__).resolve().parents[2] / "src/kkbk_engine/runtime.py"
@@ -30,10 +55,16 @@ def runtime_harness(root):
                                 for target in node.targets))
     klass = next(node for node in source.body if isinstance(node, ast.ClassDef)
                  and node.name == "KKBKHeartFlowChatting")
-    klass.body = [node for node in klass.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    body = list(klass.body)
+    klass.body = [node for node in body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                   and node.name in {"_turn", "_generate", "_retryable", "_invoke", "_wait_for_task", "_run", "_after_turn"}]
+    # 保留生产代码的类级限速器，跨任务/跨会话配额测试才能覆盖真实共享范围。
+    klass.body.extend(node for node in body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "_tool_limiter"
+                              for target in node.targets))
     for method in klass.body:
-        method.body = [node for node in method.body if not isinstance(node, ast.ImportFrom)]
+        if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            method.body = [node for node in method.body if not isinstance(node, ast.ImportFrom)]
     logger = SimpleNamespace(info=Mock(), error=Mock(), warning=Mock(), exception=Mock())
     namespace = {
         "asyncio": SimpleNamespace(to_thread=asyncio.to_thread, sleep=AsyncMock(),
@@ -54,32 +85,12 @@ def runtime_harness(root):
         "ToolExecutionResult": ToolResult, "ToolInvocation": lambda **kwargs: SimpleNamespace(**kwargs),
         "ToolExecutionContext": lambda **kwargs: SimpleNamespace(**kwargs),
         "ConcurrencyGate": ConcurrencyGate, "QueueFullError": QueueFullError, "QueueTimeoutError": QueueTimeoutError,
-        "SearchEvidence": SearchEvidence,
+        "SearchEvidence": SearchEvidence, "SlidingWindowLimiter": SlidingWindowLimiter,
     }
     # 一并编译实际名称白名单，避免测试自行放宽工具选择。
     exec(compile(ast.Module(body=[plugin_tools, klass], type_ignores=[]), str(path), "exec"), namespace)
     runtime = namespace["KKBKHeartFlowChatting"]()
-    runtime.session_id = "offline-session"
-    runtime.log_prefix = "offline"
-    runtime.config = EngineConfig()
-    runtime._anchor = lambda look: None
-    runtime._availability = lambda anchor: None
-    specs = [SimpleNamespace(name=name, provider_type="plugin", to_llm_definition=lambda: {})
-             for name in ["web_search", "read_webpage"]]
-    runtime._registry = SimpleNamespace(list_tools=AsyncMock(return_value=specs))
-    runtime._prepare = AsyncMock(side_effect=lambda *_: [SimpleNamespace(role="system", text="原有人设"),
-                                                       SimpleNamespace(role="user", text="原始问题")])
-    runtime.history = SimpleNamespace(quotable=lambda: {})
-    runtime.gate = SimpleNamespace(complete=Mock())
-    runtime._send = AsyncMock()
-    runtime._after_turn = AsyncMock()
-    runtime._llm = SimpleNamespace(generate_response_with_context=AsyncMock())
-    runtime._tool_llm = SimpleNamespace(generate_response_with_context=AsyncMock())
-    runtime._invoke = AsyncMock()
-    runtime._tool_gates = {}
-    runtime._tool_limiter = SlidingWindowLimiter(2, 60)
-    runtime.chat_stream = SimpleNamespace(platform="qq", group_id="offline-group")
-    return runtime, logger
+    return configure_runtime(runtime, root), logger
 
 
 class ToolCallItem:
@@ -218,10 +229,10 @@ def test_action_retry_preserves_current_reply_requirement(tmp_path, requires_rep
         assert "必须回应" not in correction
 
 
-def real_tools(runtime, monkeypatch):
+def real_tools(runtime, monkeypatch, clock=None):
     """使用生产工具执行方法和可推进的单调时钟，验证冷却但不实际等一分钟。"""
     runtime._invoke = type(runtime)._invoke.__get__(runtime)
-    clock = [1000.0]
+    clock = clock if clock is not None else [1000.0]
     ns = type(runtime)._invoke.__globals__
     ns["time"] = SimpleNamespace(monotonic=lambda: clock[0], time=time.time)
 
@@ -249,6 +260,81 @@ def test_rate_limit_waits_and_runs_each_search_once(tmp_path, monkeypatch):
     assert 60 <= sleep.await_args.args[0] <= 60.01
     assert runtime._tool_llm.generate_response_with_context.await_count == 2
     assert runtime._send.await_args.args[0].text == "已查完三个来源"
+
+
+def test_cross_task_and_session_quota_waits_then_runs_only_new_search(tmp_path, monkeypatch):
+    """前一任务或别的群占用同用户配额后，新任务等待并只执行新调用，不重放旧搜索。"""
+    first, _ = runtime_harness(tmp_path / "not-installed")
+    second = configure_runtime(type(first)(), tmp_path / "not-installed")
+    assert first._tool_limiter is second._tool_limiter
+    anchor = SimpleNamespace(message_info=SimpleNamespace(user_info=SimpleNamespace(user_id="1020050112")))
+    first._anchor = second._anchor = lambda look: anchor
+    first.session_id = "session-a"
+    second.session_id = "session-b"
+    second.chat_stream = SimpleNamespace(platform="qq", group_id="another-group")
+    clock = [1000.0]
+    sleep = real_tools(first, monkeypatch, clock=clock)
+    real_tools(second, monkeypatch, clock=clock)
+
+    first_calls = [SimpleNamespace(func_name="web_search", args={"query": "旧线索"},
+                                   call_id=f"a{index}") for index in range(2)]
+    first_batch = response(call=first_calls[0])
+    first_batch.tool_calls, first_batch.output_items = first_calls, [ToolCallItem(call) for call in first_calls]
+    first._llm.generate_response_with_context.return_value = response("escalate", task="先查线索")
+    first._tool_llm.generate_response_with_context.side_effect = [first_batch, response(text="旧任务完成")]
+    first._registry.invoke.return_value = ToolResult(
+        content="1. 旧线索\n摘要\n来源：https://example.com/old")
+    asyncio.run(first._turn(look()))
+    assert [call.args[0].call_id for call in first._registry.invoke.await_args_list] == ["a0", "a1"]
+
+    clock[0] = 1005.0
+    sleep.reset_mock()
+    second_calls = [
+        SimpleNamespace(func_name="web_search", args={"query": "GitHub 项目"}, call_id="b0"),
+        SimpleNamespace(func_name="read_webpage", args={"url": "https://github.com/example/project"},
+                        call_id="b1"),
+    ]
+    second_batch = response(call=second_calls[0])
+    second_batch.tool_calls, second_batch.output_items = second_calls, [ToolCallItem(call) for call in second_calls]
+    requests = []
+
+    async def generate(callback, options):
+        requests.append(callback(None))
+        return second_batch if len(requests) == 1 else response(text="新任务完成")
+
+    second._llm.generate_response_with_context.return_value = response("escalate", task="复核 GitHub")
+    second._tool_llm.generate_response_with_context.side_effect = generate
+    second._registry.invoke.return_value = ToolResult(
+        content="1. GitHub 项目\n摘要\n来源：https://github.com/example/project")
+    asyncio.run(second._turn(look()))
+
+    # 旧任务的两条搜索没有被重放；新任务只执行自己的待执行调用。
+    assert first._registry.invoke.await_count == 2
+    assert [call.args[0].call_id for call in second._registry.invoke.await_args_list] == ["b0", "b1"]
+    sleep.assert_awaited_once()
+    assert 55 <= sleep.await_args.args[0] <= 55.02
+    assert clock[0] == pytest.approx(1060.01)
+    outputs = [item for item in requests[-1] if hasattr(item, "output")]
+    assert [item.call_id for item in outputs] == ["b0", "b1"]
+    assert second._send.await_args.args[0].text == "新任务完成"
+
+
+def test_cancel_during_local_cooldown_does_not_execute_tool(tmp_path, monkeypatch):
+    """本地冷却等待可被取消，不能继续执行工具或发送完成消息。"""
+    runtime, _ = runtime_harness(tmp_path / "not-installed")
+    clock = [1000.0]
+    sleep = real_tools(runtime, monkeypatch, clock=clock)
+    anchor = SimpleNamespace(message_info=SimpleNamespace(user_info=SimpleNamespace(user_id="1020050112")))
+    assert runtime._tool_limiter.try_acquire("web_search:1020050112", 1000)
+    assert runtime._tool_limiter.try_acquire("web_search:1020050112", 1000)
+    clock[0] = 1005.0
+    sleep.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(runtime._invoke(
+            SimpleNamespace(func_name="web_search", args={"query": "GitHub"}, call_id="cancel"),
+            [SimpleNamespace(name="web_search")], anchor, wait_budget=[120]))
+    runtime._registry.invoke.assert_not_awaited()
+    runtime._send.assert_not_awaited()
 
 
 def test_wait_resumes_same_context_and_does_not_drop_batch_tail(tmp_path, monkeypatch):
@@ -355,6 +441,57 @@ def test_cooldown_budget_exhaustion_does_not_execute_tool(tmp_path, monkeypatch)
     logger.warning.assert_called_once()
 
 
+def test_insufficient_wait_budget_keeps_sources_and_names_unexecuted_review(tmp_path, monkeypatch):
+    """本地冷却等待预算不够时，保留已成功来源并点名尚未执行的 GitHub 复核。"""
+    runtime, _ = runtime_harness(tmp_path / "not-installed")
+    clock = [1000.0]
+    sleep = real_tools(runtime, monkeypatch, clock=clock)
+    anchor = SimpleNamespace(message_info=SimpleNamespace(user_info=SimpleNamespace(user_id="1020050112")))
+    runtime._anchor = lambda look: anchor
+
+    # 前一任务或别的群已经用掉该用户两次 read_webpage 配额。
+    old_calls = [SimpleNamespace(func_name="read_webpage", args={"url": f"https://example.com/{index}"},
+                                 call_id=f"a{index}") for index in range(2)]
+    old_batch = response(call=old_calls[0])
+    old_batch.tool_calls, old_batch.output_items = old_calls, [ToolCallItem(call) for call in old_calls]
+    runtime._llm.generate_response_with_context.return_value = response("escalate", task="旧任务")
+    runtime._tool_llm.generate_response_with_context.side_effect = [old_batch, response(text="旧任务完成")]
+    runtime._registry.invoke.return_value = ToolResult(content="旧页面\n来源：https://example.com/old")
+    asyncio.run(runtime._turn(look()))
+
+    runtime.config = replace(runtime.config, task=replace(runtime.config.task, max_wait_seconds=5))
+    clock[0] = 1005.0
+    sleep.reset_mock()
+    runtime._send.reset_mock()
+    runtime._registry.invoke.reset_mock()
+    runtime._tool_llm.generate_response_with_context.reset_mock()
+    calls = [
+        SimpleNamespace(func_name="web_search", args={"query": "GitHub 项目"}, call_id="s"),
+        SimpleNamespace(func_name="read_webpage", args={"url": "https://github.com/example/project/issues/1"},
+                        call_id="r"),
+    ]
+    batch = response(call=calls[0])
+    batch.tool_calls, batch.output_items = calls, [ToolCallItem(call) for call in calls]
+    runtime._tool_llm.generate_response_with_context.side_effect = [batch, response(text="不应走模型收尾")]
+    runtime._registry.invoke.side_effect = [
+        ToolResult(content="1. GitHub 项目\n项目说明\n来源：https://github.com/example/project"),
+        ToolResult(content="不应执行"),
+    ]
+    asyncio.run(runtime._turn(look()))
+
+    assert runtime._registry.invoke.await_count == 1
+    assert runtime._registry.invoke.await_args.args[0].call_id == "s"
+    sent = runtime._send.await_args.args[0].text
+    assert "https://github.com/example/project" in sent
+    assert "read_webpage" in sent and "https://github.com/example/project/issues/1" in sent
+    assert "本地冷却" in sent and "尚未执行" in sent
+    assert "暂未取得可用资料" not in sent
+    assert "操作过于频繁" not in sent
+    assert len(sent) <= runtime.config.reply.max_chars
+    # 预算已耗尽时由宿主直接交付阶段结果，不再请求模型猜测是否限流。
+    assert runtime._tool_llm.generate_response_with_context.await_count == 1
+
+
 @pytest.mark.parametrize("delivery_started", [False, True])
 def test_turn_failure_reports_once_without_retrying_uncertain_delivery(tmp_path, delivery_started):
     runtime, logger = runtime_harness(tmp_path / "not-installed")
@@ -418,7 +555,34 @@ def test_search_budget_exhaustion_delivers_actual_evidence_without_lossy_model_s
         assert "官方仓库" in delivered and "https://github.com/example/project" in delivered
         assert "阶段结果" in delivered and "尚未完成" in delivered
     else:
-        assert "暂未取得可用资料" in delivered and "官方仓库" not in delivered
+        assert "未取得可用来源" in delivered and "工具返回失败" in delivered
+        assert "未取得结果" in delivered and "官方仓库" not in delivered
+        assert "暂未取得可用资料" not in delivered
     # 预算耗尽后不再请求模型，避免再次把已有来源说成一条都没搜到。
     assert runtime._tool_llm.generate_response_with_context.await_count == 1
     assert len(delivered) <= runtime.config.reply.max_chars
+
+
+def test_upstream_failure_is_reported_as_failure_and_not_retried(tmp_path):
+    """远端失败只交付一次并保留原因，不能改写成“没有结果”。"""
+    runtime, _ = runtime_harness(tmp_path / "not-installed")
+    runtime._invoke = type(runtime)._invoke.__get__(runtime)
+    production_invoke = runtime._invoke
+
+    async def invoke(*args, wait_budget, **kwargs):
+        result = await production_invoke(*args, wait_budget=wait_budget, **kwargs)
+        # 强制进入宿主交付阶段，验证失败原因不会在收尾时丢失。
+        wait_budget[0] = 0
+        return result
+
+    runtime._invoke = invoke
+    runtime._llm.generate_response_with_context.return_value = response("escalate", task="查 GitHub")
+    call = SimpleNamespace(func_name="web_search", args={"query": "GitHub 项目"}, call_id="failed")
+    runtime._tool_llm.generate_response_with_context.return_value = response(call=call)
+    runtime._registry.invoke = AsyncMock(return_value=ToolResult(success=False, error_message="HTTP 403"))
+    asyncio.run(runtime._turn(look()))
+    delivered = runtime._send.await_args.args[0].text
+    assert runtime._registry.invoke.await_count == 1
+    assert "未取得可用来源" in delivered
+    assert "工具返回失败" in delivered and "HTTP 403" in delivered
+    assert "暂未取得可用资料" not in delivered

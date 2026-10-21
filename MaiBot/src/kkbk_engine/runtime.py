@@ -363,7 +363,10 @@ class KKBKHeartFlowChatting:
                     break
                 for call in result.tool_calls:
                     tool_result = await self._invoke(call, specs, anchor, wait_budget=wait_budget)
-                    search_evidence.add(call.func_name, tool_result.success, tool_result.get_history_content())
+                    # 保留调用参数和“未执行”状态，阶段回复才能点名仍未完成的复核。
+                    search_evidence.add(call.func_name, tool_result.success, tool_result.get_history_content(),
+                                        arguments=call.args,
+                                        not_executed=bool(tool_result.metadata.get("kkbk_not_executed")))
                     call_item = next(item for item in result.output_items
                                      if isinstance(item, FunctionCallItem) and item.tool_call.call_id == call.call_id)
                     items.append(FunctionCallOutputItem(
@@ -413,8 +416,11 @@ class KKBKHeartFlowChatting:
             while not self._tool_limiter.try_acquire(key, time.monotonic()):
                 delay = self._tool_limiter.retry_after(key, time.monotonic()) + 0.01
                 if not await self._wait_for_task(delay, wait_budget, "tool_rate_limit:" + call.func_name):
+                    # 只说明宿主本地冷却和未执行，不能把等待超时归因为远端站点限流。
                     result = ToolExecutionResult(tool_name=call.func_name, success=False,
-                        error_message="本轮等待预算已用完，该工具尚未执行；请汇总已有结果及未完成部分。")
+                        error_message=("宿主本地冷却：同用户近期已使用该工具名额，等待预算不足，"
+                                       "本次调用尚未执行且未向远端发出请求；不能据此判断远端站点限流。"),
+                        metadata={"kkbk_not_executed": "local_rate_limit"})
                     logger.warning(json.dumps({"event": "tool", "session_id": self.session_id,
                         "tool": call.func_name, "success": False, "result": result.error_message}, ensure_ascii=False))
                     return result
