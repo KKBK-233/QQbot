@@ -4,6 +4,8 @@
 
 当前支持本机 CLI/worker 及阶段 3 的 Unix socket 协调入口；QQ 宿主绑定实际发送者后可提交、查询和取消开发任务。不监听 HTTP，不部署生成代码；阶段 4 起，持久工作流候选通过测试后自动发布到线上 `workflows/`，带备份、加载自检、自动恢复和回退（`release.py`）。群内用法和回执边界见 `docs/kkbk-engine/development-coordination.md`。
 
+后续 DSH 开发约定见 [开发权限与持续会话设计](../docs/kkbk-engine/dsh-development-contract.md)：允许修改人设、提示词与整个项目代码，由 bot 持续补充需求、回答问题并推进验收。该文档当前尚未注入 `developer_prompt()`，会话控制与完整能力发布仍待实现；不表示线上权限或功能已变更。
+
 ## 前提
 
 - WSL/Linux，Python 3.12、Git、venv、Bubblewrap 与可用的 Node.js。
