@@ -121,6 +121,52 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(view['agent_summary'], '需要协调者补充验收细节')
         self.assertEqual(view['tool_calls'], {'bash':1})
 
+    def test_cross_group_continuation_reuses_workspace_and_notifies_new_group(self):
+        """跨群续聊保持开发会话、旧产物与旧通知，只有新轮次回到新群。"""
+        root=self.submit()['id']; self.run_round()
+        saved=(self.worker.store.directory(root)/'patch.diff').read_bytes()
+        origin={**self.origin,'session_id':'other-group','group_id':'427204073','message_id':'cross-one'}
+        payload={'task_id':root,'message':'跨群补齐接线'}
+        child=self.request('message',payload,origin)['id']
+        result=self.run_round()
+        self.assertEqual(result['status'],'succeeded',result)
+        self.assertEqual(result['id'],child)
+        self.assertEqual(self.calls[1][0],self.calls[0][0])
+        self.assertEqual(self.calls[1][2],'session-offline-one')
+        self.assertIn('跨群补齐接线',self.calls[1][1])
+        self.assertEqual((self.worker.store.directory(root)/'patch.diff').read_bytes(),saved)
+        self.worker.store.queue_notifications()
+        old=self.worker.store.take_notification(self.origin['session_id'])
+        new=self.worker.store.take_notification(origin['session_id'])
+        self.assertEqual(old['task_id'],root)
+        self.assertEqual(new['task_id'],child)
+        self.worker.store.acknowledge_notification(origin['session_id'],new['id'],new['claim_token'],'receipt-cross')
+        # 重复补充不能创建新轮次、迁移通知或重发已经发送的回执。
+        retry=self.request('message',payload,origin)
+        self.assertEqual(retry['id'],child)
+        restarted=Coordinator(Worker(self.cfg))
+        view=restarted.dispatch(dict(version=1,operation='status',origin=self.origin,payload={'task_id':child}))
+        self.assertEqual(view['conversation']['notification_group_id'],'427204073')
+        self.worker.store.queue_notifications()
+        self.assertIsNone(self.worker.store.take_notification(origin['session_id']))
+
+    def test_queued_cross_group_inputs_route_to_latest_new_message_not_retries(self):
+        """合并待执行补充时更新通知位置，重复请求不把通知拉回旧群。"""
+        root=self.submit()['id']
+        first={**self.origin,'session_id':'first-group','group_id':'427204073','message_id':'cross-first'}
+        last={**self.origin,'session_id':'last-group','group_id':'894179464','message_id':'cross-last'}
+        payload={'task_id':root,'message':'补充条件'}
+        self.assertEqual(self.request('message',payload,first)['id'],root)
+        self.request('message',payload,last)
+        self.request('message',payload,first)
+        self.assertEqual(len(self.worker.store.inputs(root)),2)
+        self.assertEqual(self.worker.store.get(root)['spec']['origin'],self.origin)
+        self.assertEqual(self.request('status',{'task_id':root},first)['conversation']['notification_group_id'],'894179464')
+        self.run_round(); self.worker.store.queue_notifications()
+        self.assertIsNone(self.worker.store.take_notification(self.origin['session_id']))
+        self.assertIsNone(self.worker.store.take_notification(first['session_id']))
+        self.assertEqual(self.worker.store.take_notification(last['session_id'])['task_id'],root)
+
     def test_message_during_execution_waits_until_next_round(self):
         root = self.submit()['id']
         def agent(cfg, folder, task, session_id=None):
@@ -209,10 +255,11 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.worker.store.get(child)['status'], 'cancelled')
         self.assertEqual(result['id'], child)
 
-    def test_other_session_cannot_send_follow_up(self):
+    def test_other_user_cannot_send_follow_up_from_another_group(self):
         root = self.submit()['id']
         with self.assertRaises(PermissionError):
-            self.request('message', dict(task_id=root,message='修改'), {**self.origin,'session_id':'other'})
+            self.request('message', dict(task_id=root,message='修改'),
+                         {**self.origin,'session_id':'other','group_id':'427204073','user_id':'stranger'})
         self.assertEqual(self.worker.store.inputs(root), [])
 
     def test_input_limit_and_failed_task_progress_are_explicit(self):

@@ -46,10 +46,12 @@ class DevelopmentToolProvider:
                 'scope':{'type':'string','enum':['persistent_workflow','code_change']},
                 'instructions':{'type':'string','maxLength':8192},
                 'acceptance':{'type':'string','maxLength':4096}},['scope','instructions','acceptance']),
-            'development_status':('查询当前管理员在当前群的开发任务及 conversation 实际会话进度、代理总结、错误和工具调用计数；'
+            'development_status':('查询当前管理员在任一已授权群提交的开发任务及 conversation 实际会话进度、代理总结、错误和工具调用计数；'
+                '允许跨群查询，查询不会迁移完成通知。source_group_id 为原群，notification_group_id 为当前轮次通知群；'
                 'summary_task_id 表示总结所属轮次。省略 task_id 列出最近任务。',{
                 'task_id':{'type':'string'}},[]),
-            'development_message':('向已有开发会话补充需求、回答问题或要求继续。沿用原目标、DSH 会话与工作副本，'
+            'development_message':('同一管理员可从其他已授权群向已有开发会话补充需求、回答问题或要求继续。沿用原目标、DSH 会话与工作副本，'
+                '续聊轮次完成通知发到本次发起续聊的群；已经运行的旧轮次通知仍留在原群。'
                 '当前轮结束后执行，不即时打断工具。先查 development_status 获取真实阶段和代理总结；'
                 '用同一目标的任务编号，不重新 submit。只有接口确认受理后才能说已补充。',{
                 'task_id':{'type':'string'},'message':{'type':'string','maxLength':4096}},['task_id','message']),

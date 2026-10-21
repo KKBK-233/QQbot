@@ -67,7 +67,7 @@ def test_development_message_tool_preserves_host_identity_and_has_no_session_ove
     exec(compile(ast.Module(body=[klass],type_ignores=[]),str(path),'exec'),ns)
     provider=ns['DevelopmentToolProvider'](SimpleNamespace(config=EngineConfig()))
     component=type('TextComponent',(),{})(); component.text='继续完善原任务'
-    context=SimpleNamespace(platform='qq',is_group_chat=True,group_id='1022382380',session_id='qq-session',
+    context=SimpleNamespace(platform='qq',is_group_chat=True,group_id='427204073',session_id='other-group-session',
         user_id='1020050112',metadata={'anchor_message':SimpleNamespace(message_id='actual-message',
             message_info=SimpleNamespace(user_info=SimpleNamespace(user_id='1020050112')),
             raw_message=SimpleNamespace(components=[component]))})
@@ -79,6 +79,8 @@ def test_development_message_tool_preserves_host_identity_and_has_no_session_ove
     assert result.success
     assert client.request.await_args.args==('message',)
     assert client.request.await_args.kwargs['origin']['message_id']=='actual-message'
+    assert client.request.await_args.kwargs['origin']['group_id']=='427204073'
+    assert client.request.await_args.kwargs['origin']['session_id']=='other-group-session'
     invocation.arguments['session_id']='forged'
     assert not asyncio.run(provider.invoke(invocation,context)).success
     assert client.request.await_count==1

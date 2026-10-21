@@ -18,8 +18,15 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session','engine-review'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session','development-cross-group','engine-review'])
     args=parser.parse_args()
+    # 跨群控制只更新权限、通知归属和工具说明，不覆盖引擎或工作流候选。
+    if args.phase=='development-cross-group':
+        names=['src/kkbk_engine/development.py','src/kkbk_engine/prompt.py']
+        files=[(SOURCE/'MaiBot'/name,TARGET/name) for name in names]
+        files += [(SOURCE/'dev_worker'/name,DEV/'worker-code/dev_worker'/name)
+                  for name in ['coordinator.py','store.py']]
+        return install(args.phase,files)
     # 引擎审阅修复成套更新依赖；不写入 DSH worker、配置、工作流或现有插件。
     if args.phase=='engine-review':
         files=[(p,TARGET/'src/kkbk_engine'/p.name) for p in (SOURCE/'MaiBot/src/kkbk_engine').glob('*.py')]

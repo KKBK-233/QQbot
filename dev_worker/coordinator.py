@@ -51,6 +51,10 @@ class Coordinator:
                       'queued_messages':len(self.store.inputs(current['id'])) if current['status']=='queued' else 0,
                       'agent_summary':events['final'][-3000:], 'tool_calls':events['tool_calls'],
                       'errors':events['event_errors']}
+        source=self.store.get(root)['spec'].get('origin',{})
+        destination=current['spec'].get('notification_origin') or current['spec'].get('origin',{})
+        conversation.update(source_group_id=source.get('group_id'),
+                            notification_group_id=destination.get('group_id'))
         return self.worker.redactor.value({
             'id':task['id'],'status':task['status'],'phase':task['phase'],'reason':task['reason'],
             'cancel_requested':task['cancel_requested'],'scope':task['spec'].get('scope','code_change'),
@@ -62,10 +66,12 @@ class Coordinator:
             'conversation':conversation})
 
     def owned(self, task_id, origin):
+        """归属绑定原始管理员；同一管理员可从其他已授权群接续，查询不迁移通知。"""
         task=self.store.get(task_id)
-        source=task['spec'].get('origin',{})
-        if source.get('session_id')!=origin['session_id'] or source.get('user_id')!=origin['user_id']:
-            raise PermissionError('只能管理当前会话中自己提交的开发任务')
+        root,_=self.store.session(task_id)
+        source=self.store.get(root)['spec'].get('origin',{})
+        if source.get('platform')!=origin['platform'] or source.get('user_id')!=origin['user_id']:
+            raise PermissionError('只能管理自己提交的开发任务；同一管理员可跨已授权群接续')
         return task
 
     def submit(self, origin, payload):

@@ -78,13 +78,32 @@ class CoordinatorTests(unittest.TestCase):
     def test_service_refuses_disabled_sandbox(self):
         with self.assertRaises(RuntimeError): asyncio.run(serve(self.config))
 
-    def test_other_session_cannot_query_or_cancel(self):
+    def test_owner_can_query_list_and_cancel_from_another_allowed_group(self):
         task=self.coordinator.dispatch(self.request())
-        origin={**self.origin,'session_id':'session-other'}
-        for operation in ('status','cancel'):
-            with self.assertRaises(PermissionError):
-                self.coordinator.dispatch(self.request(operation,origin,{'task_id':task['id']}))
-        self.assertEqual(self.coordinator.dispatch(self.request('list',origin,{})),[])
+        origin={**self.origin,'session_id':'session-other','group_id':'427204073'}
+        result=self.coordinator.dispatch(self.request('status',origin,{'task_id':task['id']}))
+        self.assertEqual(result['conversation']['source_group_id'],self.origin['group_id'])
+        self.assertEqual(result['conversation']['notification_group_id'],self.origin['group_id'])
+        listing=self.coordinator.dispatch(self.request('list',origin,{}))
+        self.assertEqual([item['id'] for item in listing],[task['id']])
+        result=self.coordinator.dispatch(self.request('cancel',origin,{'task_id':task['id']}))
+        self.assertEqual(result['status'],'cancelled')
+        self.worker.store.queue_notifications()
+        self.assertIsNone(self.worker.store.take_notification(origin['session_id']))
+        self.assertIsNotNone(self.worker.store.take_notification(self.origin['session_id']))
+
+    def test_cross_group_control_keeps_owner_and_group_permissions(self):
+        task=self.coordinator.dispatch(self.request())
+        other=Coordinator(Worker(replace(self.config,allowed_requesters=('1020050112','other-admin'))))
+        for operation,payload in [('status',{'task_id':task['id']}),
+                                  ('cancel',{'task_id':task['id']}),
+                                  ('message',{'task_id':task['id'],'message':'继续'})]:
+            for changed in [{'user_id':'other-admin'},{'group_id':'unknown'},
+                            {'user_id':'stranger'},{'platform':'other'}]:
+                with self.subTest(operation=operation,changed=changed),self.assertRaises(PermissionError):
+                    other.dispatch(self.request(operation,{**self.origin,**changed},payload))
+        self.assertEqual(other.dispatch(self.request('list',{**self.origin,'user_id':'other-admin'},{})),[])
+        self.assertEqual(self.worker.store.get(task['id'])['status'],'queued')
 
     def test_queued_cancel_and_single_terminal_notification(self):
         task=self.coordinator.dispatch(self.request())
@@ -147,7 +166,8 @@ class CoordinatorTests(unittest.TestCase):
                     # 真实 socket 上补充运行中任务，必须快速受理并关联同一个开发会话。
                     root=response['result']['id']; self.worker.store.claim()
                     reader,writer=await asyncio.open_unix_connection(str(path))
-                    request=self.request('message',origin={**self.origin,'message_id':'follow-socket'},
+                    request=self.request('message',origin={**self.origin,'message_id':'follow-socket',
+                                         'session_id':'cross-group-session','group_id':'427204073'},
                                          payload={'task_id':root,'message':'补充验收，不重跑已完成步骤'})
                     writer.write((json.dumps(request)+'\n').encode()); await writer.drain()
                     response=json.loads(await asyncio.wait_for(reader.readline(),3))
@@ -155,6 +175,7 @@ class CoordinatorTests(unittest.TestCase):
                     self.assertTrue(response['success'],response)
                     self.assertEqual(response['result']['conversation']['root_task_id'],root)
                     self.assertTrue(response['result']['message_queued'])
+                    self.assertEqual(response['result']['conversation']['notification_group_id'],'427204073')
                     self.assertNotEqual(response['result']['id'],root)
                 finally:
                     shutdown.set(); await asyncio.wait_for(service,5)

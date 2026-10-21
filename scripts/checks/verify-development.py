@@ -30,6 +30,14 @@ async def main():
     assert {spec.name for spec in specs}=={'learn_teaching','development_submit','development_status',
                                            'development_cancel','development_rollback','development_message'}
     for spec in specs: spec.to_llm_definition()
+    # 每个授权群都必须保留完整入口；私聊和未知群仍不获得管理工具。
+    for group_id in EngineConfig().identity.group_whitelist:
+        context.group_id=group_id
+        assert {spec.name for spec in await provider.list_tools(context)}=={spec.name for spec in specs}
+    context.group_id='not-allowed'; assert await provider.list_tools(context)==[]
+    context.group_id='427204073'; context.is_group_chat=False
+    assert await provider.list_tools(context)==[]
+    context.is_group_chat=True
     context.user_id='not-admin'; assert await provider.list_tools(context)==[]
     anchor=SimpleNamespace(message_id='fixture',message_info=SimpleNamespace(user_info=SimpleNamespace(user_id='1020050112')),
                            raw_message=SimpleNamespace(components=[TextComponent(text='以后搜索优先官方原文')]))
@@ -52,7 +60,9 @@ async def main():
     if not args.stage:
         response=await DevelopmentClient().request('notifications',payload={'session_id':'offline-development-no-delivery'})
         assert response is None
-    print(json.dumps({'admin_tools':6,'non_admin_tools':0,'source_bound':True,'conversation_message_bound':True,
+    print(json.dumps({'admin_tools':6,'non_admin_tools':0,
+                      'authorized_groups_checked':len(EngineConfig().identity.group_whitelist),'private_tools':0,
+                      'source_bound':True,'conversation_message_bound':True,
                       'model_origin_rejected':True,'real_socket_checked':not args.stage}))
 
 

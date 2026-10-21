@@ -148,6 +148,12 @@ class Store:
                 if count >= 8 or size + len(content.encode('utf-8')) > 32768:
                     raise ValueError('本轮补充消息已达上限，请等待当前轮次完成')
                 db.execute('INSERT INTO development_inputs VALUES(?,?,?,?,?)', (request_key, root, selected, content, now()))
+                # 新补充决定待执行轮次的通知群；不改原始归属，也不移动已发送回执。
+                selected_spec=json.loads(db.execute('SELECT spec FROM tasks WHERE id=?',(selected,)).fetchone()[0])
+                selected_spec['notification_origin']={key:origin[key] for key in
+                    ('platform','session_id','group_id','user_id','message_id')}
+                db.execute('UPDATE tasks SET spec=? WHERE id=?',
+                           (json.dumps(selected_spec,ensure_ascii=False),selected))
         return self.get(selected)
 
     def inputs(self, task_id):
@@ -237,7 +243,8 @@ class Store:
         with self.connect() as db:
             rows=db.execute("SELECT id,spec FROM tasks WHERE status IN ('succeeded','failed','timeout','cancelled') AND id NOT IN (SELECT task_id FROM notifications)").fetchall()
             for row in rows:
-                origin=json.loads(row['spec']).get('origin',{})
+                spec=json.loads(row['spec'])
+                origin=spec.get('notification_origin') or spec.get('origin',{})
                 if not origin.get('session_id'): continue
                 db.execute('INSERT OR IGNORE INTO notifications(id,task_id,session_id,created_at) VALUES(?,?,?,?)',
                            (uuid.uuid4().hex,row['id'],origin['session_id'],now()))
