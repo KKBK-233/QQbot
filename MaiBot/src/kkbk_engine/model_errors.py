@@ -37,6 +37,11 @@ def output_metadata(result) -> dict:
         "content_chars": len(result.response),
         "reasoning_chars": len(getattr(result, "reasoning", "")),
         "tool_call_count": len(result.tool_calls or []),
+        "raw_content_kind": (
+            message.get("content_kind") if message.get("content_kind") in {"none", "text", "blocks", "other"} else None
+        ),
+        "raw_content_chars": message.get("content_chars") if isinstance(message.get("content_chars"), int) else None,
+        "raw_reasoning_chars": message.get("reasoning_chars") if isinstance(message.get("reasoning_chars"), int) else None,
     }
 
 

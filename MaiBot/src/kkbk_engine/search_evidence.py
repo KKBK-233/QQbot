@@ -228,3 +228,25 @@ class SearchEvidence:
         if not candidates:
             return self._no_source_reply(max_chars, issue_lines)
         return self._sources_reply(max_chars, candidates, issue_lines)
+
+    def compact_reply(self, max_chars: int) -> str:
+        """群内只交付少量短线索；完整摘要和工具错误保留在本轮证据及日志中。"""
+        budget = max(0, min(600, int(max_chars)))
+        issue_lines = []
+        if self.issues:
+            tool, arguments, status, detail = self.issues[0]
+            target = " ".join(str(arguments.get("query") or arguments.get("url") or "").split())[:120].replace("@", "＠")
+            label = tool + (f"（{target}）" if target else "")
+            state = "尚未执行" if status == "not_executed" else "工具返回失败"
+            # 只展示首句原因，不把工具返回中的操作建议整段发回群里。
+            brief = re.split(r"[。；\n]", detail, maxsplit=1)[0][:70].replace("@", "＠")
+            issue_lines.append(f"{label}：{state}：{brief or '未提供原因'}")
+            if len(self.issues) > 1:
+                issue_lines.append(f"（其余 {len(self.issues) - 1} 项失败或未执行说明已省略）")
+        candidates = [
+            (excerpt if len(excerpt) <= 60 else excerpt[:59] + "…", url, tool)
+            for excerpt, url, tool in list(self.sources.values())[:3]
+        ]
+        if not candidates:
+            return self._no_source_reply(budget, issue_lines)
+        return self._sources_reply(budget, candidates, issue_lines)

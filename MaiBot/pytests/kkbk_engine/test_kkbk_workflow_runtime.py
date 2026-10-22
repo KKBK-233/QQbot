@@ -187,8 +187,12 @@ def test_empty_output_retries_once_without_fabricated_correction(tmp_path):
     asyncio.run(runtime._generate(items, heavy=False, specs=[], validation=ValidationContext(True, {}, frozenset(), 1500)))
     assert runtime._llm.generate_response_with_context.await_count == 2
     assert items == []  # 没有输出不是非法 JSON；不附加虚构的模型文本或思考。
+    calls = runtime._llm.generate_response_with_context.await_args_list
+    assert calls[0].args[1]["response_format"] is not None
+    assert calls[1].args[1]["response_format"] is None
     records = [json.loads(call.args[0]) for call in logger.info.call_args_list]
     assert records[0]["content_chars"] == 2 and records[0]["finish_reason"] == "stop"
+    assert [record["output_mode"] for record in records] == ["json_object", "prompt_json"]
     assert "诊断只记录长度" not in json.dumps(records, ensure_ascii=False)
 
 
@@ -259,6 +263,11 @@ def test_empty_final_response_delivers_existing_search_without_reexecution(tmp_p
     assert "连续返回空正文" in runtime._send.await_args.args[0].text
     assert "https://example.com/source" in runtime._send.await_args.args[0].text
     runtime._invoke.assert_awaited_once()
+    calls = runtime._tool_llm.generate_response_with_context.await_args_list
+    assert calls[-2].args[1]["response_format"] is not None
+    assert calls[-1].args[1]["response_format"] is None
+    assert calls[-2].args[1]["tool_options"] == calls[-1].args[1]["tool_options"]
+    assert len(runtime._send.await_args.args[0].text) <= 700
 
 
 def test_in_flight_tools_and_retry_keep_snapshot_and_next_turn_reloads(tmp_path):
@@ -801,3 +810,24 @@ def test_upstream_failure_is_reported_as_failure_and_not_retried(tmp_path):
     assert "未取得可用来源" in delivered
     assert "工具返回失败" in delivered and "HTTP 403" in delivered
     assert "暂未取得可用资料" not in delivered
+
+
+def test_prompt_json_retry_keeps_action_validation_and_does_not_add_third_call(tmp_path):
+    """关闭接口约束后仍拒绝非法动作，不能把任意文本直接当回复发送。"""
+    runtime, _ = runtime_harness(tmp_path)
+    runtime._llm.generate_response_with_context.side_effect = [
+        empty_response(), response("silent"),
+    ]
+    with pytest.raises(ActionError):
+        asyncio.run(runtime._turn(look()))
+    assert runtime._llm.generate_response_with_context.await_count == 2
+    runtime._send.assert_not_awaited()
+
+
+def test_network_retry_keeps_json_mode(tmp_path):
+    """网络异常不视为空正文，不改变后续请求格式。"""
+    runtime, _ = runtime_harness(tmp_path)
+    runtime._llm.generate_response_with_context.side_effect = [OSError("offline"), response()]
+    asyncio.run(runtime._generate([], heavy=False, specs=[], validation=ValidationContext(True, {}, frozenset(), 1500)))
+    calls = runtime._llm.generate_response_with_context.await_args_list
+    assert all(call.args[1]["response_format"] is not None for call in calls)

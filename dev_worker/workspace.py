@@ -124,12 +124,16 @@ def prepare_environment(config, folder, cancel):
     for name in ('sessions','storages'):
         (home/name).mkdir(mode=0o700)
     (home/'.env').touch(mode=0o600)
+
+def write_dsh_patch(config, folder):
+    """每轮启动前按当前配置重写；续聊旧会话不能沿用开工时的旧覆盖层。"""
     patch=folder/'dsh-patch.yml'
     # DeepSeek 声明 1M 窗口，默认 80% 才压缩，长会话每步重带几十万旧上下文；按绝对阈值提前压缩。
     ratio=config.compact_threshold_tokens/DEEPSEEK_CONTEXT_WINDOW
     patch.write_text(f'- id: bash-sandbox\n  config:\n    timeoutMs: {config.bash_timeout_ms}\n'
                      f'- id: compaction-basic\n  config:\n    thresholdRatio: {ratio:.4f}\n'
                      f'    retainTokens: {config.compact_retain_tokens}\n    maxTokens: 8192\n',encoding='utf-8')
+    return patch
 
 def agent_env(config,folder):
     """最小环境不导出空密钥，DSH 在隔离环境读取专用凭据文件。"""
@@ -172,7 +176,7 @@ def sandbox_command(config,folder,command,*,agent=False):
     args+=['--chdir',str(folder/'ws'),'--',*[str(value) for value in command]]
     return args
 
-def developer_prompt(task):
+def developer_prompt(task, stall_limit):
     return ('请在当前独立工作副本完成开发任务。可以读取和修改整个项目、运行命令与测试。'
             '开发范围包括人设、system 与任务提示词、工作流、插件、依赖和执行代码。'
             '组合副本的主仓在当前目录，维护根仓在 .project/integration，独立插件已展开；'
@@ -185,7 +189,13 @@ def developer_prompt(task):
             # 实测续跑轮次大量步骤花在探查端口、socket 和重读已读代码上，每步都重带全部上下文。
             '控制步数：先定位再修改，不重复读取已读过且未改动的文件，测试先跑目标文件再跑全量。'
             '任务所需的接口、服务或凭据在工作副本内找不到时，直接在答复中说明缺什么并结束本轮，'
-            '不要扫描端口、进程、socket 或开发目录去寻找替代入口。\n\n'+task)
+            '不要扫描端口、进程、socket 或开发目录去寻找替代入口。'
+            # 实测外部站点被 Cloudflare 拦截后，代理连续十余步用搜索、存档站、转抓服务和别的语言实现绕路。
+            '外部资源不可用（被拦截、断网、缺 key、限流）时，直接说明阻塞点和需要协调者提供的输入并结束本轮；'
+            '不要用网页搜索、代理、存档站、第三方转抓服务或其他语言的实现绕过，也不要伪造“真实样本”。'
+            '验收条件在当前环境做不到时，先指出冲突再停下，不要默默降级或反复尝试。'
+            f'连续 {stall_limit} 步既没有修改文件也没有运行测试，宿主会终止本轮；'
+            '卡住时应主动总结卡点并结束，而不是继续探索。\n\n'+task)
 
 def agent_command(config,folder,task,session_id=None):
     command=[config.dsh_bin,'--profile','headless','--patch',folder/'dsh-patch.yml',
@@ -195,7 +205,7 @@ def agent_command(config,folder,task,session_id=None):
         if not isinstance(session_id,str) or not re.fullmatch(r'session-[A-Za-z0-9-]{1,100}', session_id):
             raise ValueError('DSH 会话标识无效')
         command += ['--session-id',session_id]
-    command += [developer_prompt(task)]
+    command += [developer_prompt(task,config.max_unproductive_steps)]
     return sandbox_command(config,folder,command,agent=True)
 
 def collect_patch(config,folder,base_commit,cancel,artifact_folder=None):

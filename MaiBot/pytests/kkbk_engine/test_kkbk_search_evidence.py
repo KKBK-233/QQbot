@@ -146,3 +146,42 @@ def test_no_sources_long_failures_are_bounded_and_marked():
     assert "工具返回失败" in text
     assert "省略" in text
     assert text.endswith("待核实的线索仍未完成。")
+
+
+def test_compact_reply_keeps_three_short_sources_without_losing_collected_evidence():
+    """群内限三条短线索，后台证据仍保留全部真实来源。"""
+    evidence = SearchEvidence()
+    evidence.add("web_search", True, "\n\n".join(
+        f"{i}. 资料{i}\n" + "详细摘要" * 100 + f"\n来源：https://example.com/{i}"
+        for i in range(1, 7)
+    ))
+    evidence.add("web_search", False, "DuckDuckGo 和 Bing 均未获取相关结果。可换关键词重试；向用户坦诚说明检索失败。")
+    text = evidence.compact_reply(1500)
+    assert len(text) <= 600
+    assert all(f"https://example.com/{i}" in text for i in range(1, 4))
+    assert "https://example.com/4" not in text
+    assert "可换关键词重试" not in text and "向用户坦诚" not in text
+    assert "未获取相关结果" in text and "尚未完成" in text
+    assert len(evidence.sources) == 6 and "向用户坦诚" in evidence.issues[0][3]
+
+
+def test_compact_reply_does_not_claim_local_unexecuted_request_was_remote_failure():
+    evidence = SearchEvidence()
+    evidence.add("read_webpage", False, "宿主本地冷却，预算不足，本次未向远端请求。不能推断远端限流。", not_executed=True)
+    text = evidence.compact_reply(1500)
+    assert "未取得可用来源" in text and "read_webpage：尚未执行" in text
+    assert "本地冷却" in text and "工具返回失败" not in text
+    assert "远端限流" not in text
+    for limit in (0, 1, 30, 100):
+        assert len(evidence.compact_reply(limit)) <= limit
+
+
+def test_compact_reply_bounds_many_failures_and_long_source_urls():
+    evidence = SearchEvidence()
+    evidence.add("web_search", True, "1. 超长链接资料\n真实摘录\n来源：https://example.com/" + "x" * 1000)
+    for i in range(6):
+        evidence.add("read_webpage", False, f"HTTP 503，第{i}次网页读取失败。下一步不应整段展示。")
+    text = evidence.compact_reply(1500)
+    assert len(text) <= 600 and "真实摘录" in text
+    assert "下一步不应整段展示" not in text
+    assert len(evidence.sources) == 1 and len(evidence.issues) == 6

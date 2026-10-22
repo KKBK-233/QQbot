@@ -3,6 +3,7 @@ from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 import json
+import re
 import time
 
 from . import project, release, source_release
@@ -11,7 +12,52 @@ from .process import Stopped, run_process
 from .redaction import Redactor
 from .store import Store, atomic_json, exclusive_lock
 from .workspace import (agent_command,agent_env,collect_patch,prepare_clone,prepare_environment,
-                        resolve_commit,test_command)
+                        resolve_commit,test_command,write_dsh_patch)
+
+# 只有改文件和跑测试算产出；读文件、搜索、联网都算探索。
+_PRODUCTIVE_TOOLS=frozenset({'edit','write'})
+_TEST_COMMAND=re.compile(r'\b(?:pytest|unittest)\b')
+
+class StallWatch:
+    """增量读取 DSH 事件流，连续若干步没有产出即终止本轮。
+
+    实测续聊轮次在外部站点被拦截后连续十余步上网绕路，每步重带数十万上下文；
+    提示词约束不可靠，由宿主按事件硬性截停。
+    """
+    def __init__(self,path: Path,limit: int):
+        self.path=path
+        self.limit=limit
+        self.offset=0
+        self.buffer=b''
+        self.idle=0
+        self.productive=False
+        self.started=False
+
+    def feed(self,event: dict):
+        kind=event.get('type')
+        if kind=='status' and event.get('phase')=='step_start':
+            # 新一步开始时结算上一步。
+            if self.started:
+                self.idle=0 if self.productive else self.idle+1
+            self.started,self.productive=True,False
+            if self.idle>=self.limit: raise Stopped('stalled')
+        elif kind=='tool_call':
+            tool=str(event.get('tool',''))
+            command=(event.get('input') or {}).get('command') if isinstance(event.get('input'),dict) else None
+            if tool in _PRODUCTIVE_TOOLS or (tool=='bash' and _TEST_COMMAND.search(str(command or ''))):
+                self.productive=True
+
+    def __call__(self):
+        if not self.path.exists(): return
+        with self.path.open('rb') as stream:
+            stream.seek(self.offset)
+            data=stream.read()
+        self.offset+=len(data)
+        *lines,self.buffer=(self.buffer+data).split(b'\n')
+        for line in lines:
+            try: event=json.loads(line)
+            except ValueError: continue
+            if isinstance(event,dict): self.feed(event)
 
 def event_summary(path: Path, redactor=None):
     """读取 DSH 事件，不把 final 自述或退出码单独视为测试成功。"""
@@ -145,12 +191,15 @@ class Worker:
             self.store.phase(task_id,'agent')
             additions=self.store.inputs(task_id)
             prompt=task['spec']['task']+''.join('\n\n【协调者补充】\n'+item for item in additions)
+            # 续聊复用旧工作区，不再执行 prepare_environment；覆盖层必须每轮按当前配置重写。
+            write_dsh_patch(cfg,workspace_folder)
             command=(agent_command(cfg,workspace_folder,prompt,session_id=session_id) if parent_id
                      else agent_command(cfg,workspace_folder,prompt))
             response=run_process(command,cwd=workspace_folder/'ws',
                 env=agent_env(cfg,workspace_folder),stdout=folder/'events.jsonl',stderr=folder/'stderr.log',
                 timeout=cfg.agent_timeout_sec,cancel=cancelled,max_bytes=cfg.max_log_bytes,
-                idle_timeout=cfg.effective_agent_idle_timeout_sec)
+                idle_timeout=cfg.effective_agent_idle_timeout_sec,
+                watch=StallWatch(folder/'events.jsonl',cfg.max_unproductive_steps))
             result['agent_exit']=response.exit_code
             result['durations']['agent']=round(response.seconds,3)
             result['events']=event_summary(folder/'events.jsonl',self.redactor)

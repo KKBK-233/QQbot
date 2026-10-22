@@ -245,11 +245,13 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
     async def _generate(self, items, *, heavy: bool, specs, validation):
         """只重试当前模型请求一次；已执行工具的结果留在 items，绝不从头重放工具。"""
         client = self._tool_llm if heavy else self._llm
-        options = LLMGenerationOptions(
-            tool_options=[spec.to_llm_definition() for spec in specs] if heavy else [],
-            response_format=RespFormat(format_type=RespFormatType.JSON_OBJ),
-        )
+        force_json = True
         for attempt in range(2):
+            # 空正文补试关闭接口 JSON 模式；提示词与本地动作校验仍保持同一协议。
+            options = LLMGenerationOptions(
+                tool_options=[spec.to_llm_definition() for spec in specs] if heavy else [],
+                response_format=RespFormat(format_type=RespFormatType.JSON_OBJ) if force_json else None,
+            )
             started = time.monotonic()
             try:
                 result = await client.generate_response_with_context(
@@ -263,6 +265,7 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
                             "session_id": self.session_id,
                             "stage": "tools" if heavy else "light",
                             "attempt": attempt + 1,
+                            "output_mode": "json_object" if force_json else "prompt_json",
                             "duration_ms": round((time.monotonic() - started) * 1000),
                             "model": result.model_name,
                             "prompt_tokens": result.prompt_tokens,
@@ -282,6 +285,8 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
                 if attempt or not self._retryable(exc):
                     raise
                 logger.warning(f"{self.log_prefix} 当前模型请求补试一次：{type(exc).__name__}")
+                if error_kind(exc) == "empty_output":
+                    force_json = False
                 if isinstance(exc, ActionError):
                     # 补试只重申本轮真实约束，不能把可沉默的戳一戳重新变成强制回应。
                     reply_rule = (
@@ -371,7 +376,7 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
                 if finalizing and search_evidence.attempts:
                     # 已取得资料必须交付；不再让收尾模型自行判断是否存在结果。
                     action = ModelAction(
-                        action="reply", track="leave", text=search_evidence.partial_reply(validation.max_chars)
+                        action="reply", track="leave", text=search_evidence.compact_reply(validation.max_chars)
                     )
                     break
                 if finalizing:
@@ -390,7 +395,7 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
                         raise
                     # 模型无法收尾时仍交付已有证据，不重新执行搜索或其他工具。
                     prefix = failure_text(exc)
-                    partial = search_evidence.partial_reply(max(0, validation.max_chars - len(prefix) - 1))
+                    partial = search_evidence.compact_reply(max(0, validation.max_chars - len(prefix) - 1))
                     action = ModelAction(
                         action="reply", track="leave", text=(prefix + "\n" + partial)[: validation.max_chars]
                     )

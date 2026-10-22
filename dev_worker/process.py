@@ -31,8 +31,11 @@ def terminate_group(process):
     process.wait()
 
 def run_process(command, *, cwd, env, stdout: Path, stderr: Path, timeout, cancel=lambda:False,
-                max_bytes=8*1024*1024,idle_timeout=None):
-    """输出写入文件避免管道死锁；轮询上限可能短暂超出一个采样周期。"""
+                max_bytes=8*1024*1024,idle_timeout=None,watch=None):
+    """输出写入文件避免管道死锁；轮询上限可能短暂超出一个采样周期。
+
+    watch 在每次轮询时调用，可抛出 Stopped 按输出内容终止进程。
+    """
     if cancel(): raise Stopped('cancelled')
     stdout.parent.mkdir(parents=True,exist_ok=True)
     started=time.monotonic()
@@ -53,6 +56,7 @@ def run_process(command, *, cwd, env, stdout: Path, stderr: Path, timeout, cance
                 if idle_timeout is not None and time.monotonic()-last_progress > idle_timeout:
                     raise Stopped('no_progress')
                 if size > max_bytes: raise Stopped('output_limit')
+                if watch is not None: watch()
                 time.sleep(0.1)
             if stdout.stat().st_size+stderr.stat().st_size > max_bytes: raise Stopped('output_limit')
             return ProcessResult(process.returncode,time.monotonic()-started)

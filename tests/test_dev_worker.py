@@ -14,8 +14,9 @@ import unittest
 from dev_worker.config import WorkerConfig
 from dev_worker.process import Stopped,run_process
 from dev_worker.store import Store,atomic_json,exclusive_lock
-from dev_worker.worker import Worker,event_summary,outcome
-from dev_worker.workspace import agent_env,sandbox_command,prepare_clone,resolve_commit,visible_venv
+from dev_worker.worker import StallWatch,Worker,event_summary,outcome
+from dev_worker.workspace import (agent_env,developer_prompt,sandbox_command,prepare_clone,resolve_commit,
+                                  visible_venv,write_dsh_patch)
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):
@@ -212,7 +213,67 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(main(['run','--once']),2)
         self.assertFalse(json.loads(output.getvalue())['success'])
 
+class StallTests(unittest.TestCase):
+    @staticmethod
+    def step(n): return {'type':'status','phase':'step_start','step':n}
+
+    @staticmethod
+    def call(tool,command=None):
+        return {'type':'tool_call','tool':tool,'input':{'command':command} if command else {}}
+
+    def feed(self,events,limit=3):
+        watch=StallWatch(Path('unused'),limit)
+        for event in events: watch.feed(event)
+        return watch
+
+    def test_exploration_only_steps_are_stopped(self):
+        events=[]
+        for n in range(1,4): events+=[self.step(n),self.call('bash','curl https://example.invalid'),self.call('web_search')]
+        self.feed(events)  # 第 3 步尚未结算
+        with self.assertRaises(Stopped) as error: self.feed(events+[self.step(4)])
+        self.assertEqual(error.exception.reason,'stalled')
+
+    def test_edits_and_test_runs_reset_the_counter(self):
+        events=[self.step(1),self.call('read'),self.step(2),self.call('read'),
+                self.step(3),self.call('edit'),self.step(4),self.call('read'),self.step(5),self.call('read'),
+                self.step(6),self.call('bash','python -m pytest -q tests/x.py'),
+                self.step(7),self.call('glob'),self.step(8),self.call('read'),self.step(9)]
+        self.assertEqual(self.feed(events).idle,2)
+
+    def test_reads_events_incrementally_with_partial_lines(self):
+        with TemporaryDirectory() as name:
+            path=Path(name)/'events.jsonl'
+            watch=StallWatch(path,2)
+            watch()  # 文件尚未创建
+            lines=[json.dumps(e) for e in [self.step(1),self.call('read'),self.step(2),self.call('read')]]
+            text='\n'.join(lines)+'\n'+json.dumps(self.step(3))
+            path.write_text(text[:-5]); watch()
+            self.assertEqual(watch.idle,1)
+            path.write_text(text+'\n')
+            with self.assertRaises(Stopped): watch()
+
+    def test_prompt_and_overlay_carry_current_limits(self):
+        cfg=WorkerConfig(root=Path('worker'),source_repo=Path('source'),max_unproductive_steps=7,
+                         compact_threshold_tokens=100_000,compact_retain_tokens=20_000)
+        prompt=developer_prompt('任务正文',cfg.max_unproductive_steps)
+        self.assertIn('连续 7 步',prompt)
+        self.assertIn('不要用网页搜索、代理、存档站',prompt)
+        self.assertTrue(prompt.endswith('任务正文'))
+        with TemporaryDirectory() as name:
+            text=write_dsh_patch(cfg,Path(name)).read_text()
+        self.assertIn('thresholdRatio: 0.1000',text)
+        self.assertIn('retainTokens: 20000',text)
+
 class ProcessTests(unittest.TestCase):
+    def test_watch_can_stop_a_running_process(self):
+        with TemporaryDirectory() as name:
+            folder=Path(name)
+            def watch(): raise Stopped('stalled')
+            with self.assertRaises(Stopped) as error:
+                run_process([sys.executable,'-c','import time; time.sleep(10)'],cwd=folder,
+                    env=dict(os.environ),stdout=folder/'out',stderr=folder/'err',timeout=3,watch=watch)
+            self.assertEqual(error.exception.reason,'stalled')
+
     def test_no_progress_has_an_explicit_end_reason(self):
         with TemporaryDirectory() as name:
             folder=Path(name)

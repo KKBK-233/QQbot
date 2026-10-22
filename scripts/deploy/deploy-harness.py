@@ -18,8 +18,12 @@ def sha(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session','development-cross-group','engine-review','image-search','image-search-sdk-fix','empty-response','source-release'])
+    parser.add_argument('phase',choices=['workflows','development','task-resume','forward-images','snowluma-adapter','action-protocol','development-session','development-cross-group','engine-review','image-search','image-search-sdk-fix','empty-response','source-release','stall-guard'])
     args=parser.parse_args()
+    # 续聊压缩、提示词纪律与无产出截停只改 worker，不触碰 MaiBot 或发布映射。
+    if args.phase=='stall-guard':
+        return install(args.phase,[(SOURCE/'dev_worker'/name,DEV/'worker-code/dev_worker'/name)
+                                   for name in ('config.py','process.py','worker.py','workspace.py')])
     if args.phase=='source-release':
         files=[(p,DEV/'worker-code/dev_worker'/p.name) for p in (SOURCE/'dev_worker').glob('*.py')]
         files.append((SOURCE/'dev_worker/project.wsl.json',DEV/'project.json'))
@@ -27,8 +31,9 @@ def main():
                   for name in ('development.py','dev_protocol.py','model_errors.py')]
         return install(args.phase,files)
     if args.phase=='empty-response':
+        # 空正文补试依赖短摘要交付，四个运行文件必须成套更新。
         names=['src/kkbk_engine/model_errors.py','src/kkbk_engine/runtime.py',
-               'src/llm_models/model_client/openai_client.py']
+               'src/kkbk_engine/search_evidence.py','src/llm_models/model_client/openai_client.py']
         return install(args.phase,[(SOURCE/'MaiBot'/name,TARGET/name) for name in names])
     # SDK 取图修复只更新插件读取逻辑、版本和说明，保留压缩配置与宿主接线。
     if args.phase=='image-search-sdk-fix':

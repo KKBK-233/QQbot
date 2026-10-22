@@ -107,8 +107,13 @@ class SessionTests(unittest.TestCase):
         first = self.run_round(); self.assertEqual(first['status'], 'succeeded', first)
         original = self.worker.store.directory(root) / 'patch.diff'
         saved = original.read_bytes()
+        # 模拟压缩功能上线前开工的旧会话：覆盖层里只有 bash 超时。
+        overlay = self.worker.store.directory(root) / 'dsh-patch.yml'
+        overlay.write_text('- id: bash-sandbox\n  config:\n    timeoutMs: 900000\n')
         child = self.message(root, text='补齐第二步')['id']
         second = self.run_round(); self.assertEqual(second['status'], 'succeeded', second)
+        self.assertIn('compaction-basic', overlay.read_text())
+        self.assertIn('retainTokens: 32000', overlay.read_text())
         self.assertEqual(second['id'], child)
         self.assertEqual(self.calls[1][0], self.calls[0][0])
         self.assertEqual(self.calls[1][2], 'session-offline-one')

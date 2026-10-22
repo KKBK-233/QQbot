@@ -1,7 +1,7 @@
 {
   "source_refs": {
-    "integration": "1c6ac30ea54c4fdda19ab13e6a05cd58d558632a",
-    "maibot": "7a8091eef62b1378f914b8e9e622caf94ff0cfbb",
+    "integration": "2626c2444093718d4abba06a0a2715a8192fbc63",
+    "maibot": "f7c5000d7e7ae7f4be397653afd1c908563cf47c",
     "upstream": "bac9090758668098003d59642b607fb0f1b77337",
     "image_reverse_search": "8684e0eb2f220c88776761ddc6f6550df66e5c86"
   },

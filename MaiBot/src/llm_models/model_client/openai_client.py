@@ -57,6 +57,7 @@ from src.llm_models.payload_content.context_item import (
     ProviderActivityItem,
     ProviderOpaqueItem,
     ReasoningItem,
+    ReasoningRepresentation,
     SystemMessageItem,
     UserMessageItem,
     build_portable_output_items,
@@ -484,10 +485,15 @@ def _sanitize_messages_for_toolless_request(items: List[ContextItem]) -> List[Co
     return [item for item in items if not isinstance(item, (FunctionCallItem, FunctionCallOutputItem))]
 
 
-def _convert_assistant_item_group(items: List[ContextItem]) -> ChatCompletionAssistantMessageParam | None:
+def _convert_assistant_item_group(
+    items: List[ContextItem],
+    *,
+    include_reasoning: bool = False,
+) -> ChatCompletionAssistantMessageParam | None:
     """把相邻的模型输出 Items 折叠为 Chat assistant message。"""
 
     text_parts: List[str] = []
+    reasoning_parts: List[str] = []
     tool_calls: List[ContextToolCall] = []
     for item in items:
         if isinstance(item, AssistantMessageItem):
@@ -496,11 +502,15 @@ def _convert_assistant_item_group(items: List[ContextItem]) -> ChatCompletionAss
                 if part_text is None:
                     raise ValueError("Chat assistant message 仅支持文本片段")
                 text_parts.append(part_text)
+        elif isinstance(item, ReasoningItem) and include_reasoning:
+            # DeepSeek 工具续接需要原生思考；摘要和不透明数据不能冒充原始字段。
+            if item.representation == ReasoningRepresentation.RAW_TEXT:
+                reasoning_parts.extend(item.text_parts)
         elif isinstance(item, FunctionCallItem):
             tool_calls.append(item.tool_call)
 
     content = "".join(text_parts)
-    if not content and not tool_calls:
+    if not content and not tool_calls and not reasoning_parts:
         return None
     payload: ChatCompletionAssistantMessageParam = {
         "role": "assistant",
@@ -508,10 +518,16 @@ def _convert_assistant_item_group(items: List[ContextItem]) -> ChatCompletionAss
     }
     if tool_calls:
         payload["tool_calls"] = _convert_assistant_tool_calls(tool_calls)
+    if include_reasoning:
+        cast(Dict[str, Any], payload)["reasoning_content"] = "".join(reasoning_parts)
     return payload
 
 
-def _convert_messages(items: List[ContextItem]) -> List[ChatCompletionMessageParam]:
+def _convert_messages(
+    items: List[ContextItem],
+    *,
+    include_reasoning: bool = False,
+) -> List[ChatCompletionMessageParam]:
     """将内部消息列表转换为 OpenAI 兼容消息列表。
 
     Args:
@@ -567,7 +583,7 @@ def _convert_messages(items: List[ContextItem]) -> List[ChatCompletionMessagePar
                     break
                 group_items.append(next_item)
                 index += 1
-            assistant_payload = _convert_assistant_item_group(group_items)
+            assistant_payload = _convert_assistant_item_group(group_items, include_reasoning=include_reasoning)
             if assistant_payload is not None:
                 converted_messages.append(assistant_payload)
             continue
@@ -998,8 +1014,26 @@ def _chat_response_diagnostic(raw_data: Any) -> Dict[str, Any]:
         return {}
     choice = choices[0]
     message = getattr(choice, "message", None)
-    return {"choices": [{"finish_reason": getattr(choice, "finish_reason", None),
-                         "message": {"refusal": bool(getattr(message, "refusal", None))}}]}
+    content = getattr(message, "content", None)
+    reasoning = _extract_reasoning_content(message, "reasoning_content") or ""
+    # 只记录原始字段形态及长度，用于区分接口空正文与本地解析丢失，不复制内容。
+    if content is None:
+        content_kind = "none"
+    elif isinstance(content, str):
+        content_kind = "text"
+    elif isinstance(content, list):
+        content_kind = "blocks"
+    else:
+        content_kind = "other"
+    return {"choices": [{
+        "finish_reason": getattr(choice, "finish_reason", None),
+        "message": {
+            "refusal": bool(getattr(message, "refusal", None)),
+            "content_kind": content_kind,
+            "content_chars": len(content) if isinstance(content, str) else 0,
+            "reasoning_chars": len(reasoning),
+        },
+    }]}
 
 
 def _coerce_openai_argument(value: Any) -> Any | Omit:
@@ -1524,15 +1558,24 @@ class OpenaiClient(AdapterClient[AsyncStream[ChatCompletionChunk], ChatCompletio
                 if request.tool_options
                 else _sanitize_messages_for_toolless_request(request.context_items)
             )
-            messages_payload: List[ChatCompletionMessageParam] = _convert_messages(request_messages)
-            tools_payload: List[ChatCompletionToolParam] | None = (
-                _convert_tool_options(request.tool_options) if request.tool_options else None
-            )
-            openai_response_format = _convert_response_format(request.response_format)
             request_overrides = split_openai_request_overrides(
                 request.extra_params,
                 reserved_body_keys=CHAT_COMPLETIONS_RESERVED_EXTRA_BODY_KEYS,
             )
+            # 仅给官方 DeepSeek 的思考工具链回传原生字段，其他提供方沿用原协议。
+            thinking = request_overrides.extra_body.get("thinking", {})
+            include_reasoning = (
+                bool(request.tool_options)
+                and (urlparse(self.api_provider.base_url).hostname or "").lower() == "api.deepseek.com"
+                and not (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+            )
+            messages_payload: List[ChatCompletionMessageParam] = _convert_messages(
+                request_messages, include_reasoning=include_reasoning,
+            )
+            tools_payload: List[ChatCompletionToolParam] | None = (
+                _convert_tool_options(request.tool_options) if request.tool_options else None
+            )
+            openai_response_format = _convert_response_format(request.response_format)
 
             temperature_argument = (
                 omit if "temperature" in request_overrides.extra_body else _coerce_openai_argument(request.temperature)
