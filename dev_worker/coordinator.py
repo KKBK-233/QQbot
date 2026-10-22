@@ -38,6 +38,7 @@ class Coordinator:
                if raw_patch else {})
         # 只有工作流候选会自动发布；release 为空表示未尝试发布。
         published=result.get('release') or None
+        source_published=self.store.source_publication(task['id'])
         root,current=self.store.session(task['id'])
         summary_task=current['id']
         events=event_summary(self.store.directory(current['id'])/'events.jsonl',self.worker.redactor)
@@ -59,7 +60,9 @@ class Coordinator:
             'id':task['id'],'status':task['status'],'phase':task['phase'],'reason':task['reason'],
             'cancel_requested':task['cancel_requested'],'scope':task['spec'].get('scope','code_change'),
             'base_commit':task['spec']['base_commit'],
-            'candidate_only':not (published and published['state']=='installed'),
+            'candidate_only':not ((published and published['state']=='installed') or
+                                  (source_published and source_published['state']=='installed')),
+            'source_candidate':result.get('source_candidate'), 'source_release':source_published,
             'candidate_discarded':bool(result.get('candidate_discarded')),
             'test_exit':result.get('test_exit'),'patch':patch,'release':published,
             'error':result.get('error',''),'delivery':self.store.notification_state(task['id']),

@@ -986,7 +986,20 @@ def _build_portable_api_response(
             logical_turn_id=logical_turn_id,
         ),
         raw_data=raw_data,
+        # 引擎需要结束原因区分空输出与明确过滤；只透传标记，不复制拒绝正文或思考。
+        provider_response=_chat_response_diagnostic(raw_data),
     )
+
+
+def _chat_response_diagnostic(raw_data: Any) -> Dict[str, Any]:
+    """保留 Chat Completion 的必要诊断字段，供服务层传递给动作解析器。"""
+    choices = getattr(raw_data, "choices", None) or []
+    if not choices:
+        return {}
+    choice = choices[0]
+    message = getattr(choice, "message", None)
+    return {"choices": [{"finish_reason": getattr(choice, "finish_reason", None),
+                         "message": {"refusal": bool(getattr(message, "refusal", None))}}]}
 
 
 def _coerce_openai_argument(value: Any) -> Any | Omit:
@@ -1374,7 +1387,8 @@ def _default_normal_response_parser(
         tool_argument_parse_mode,
         resp,
     )
-    if not content and not reasoning_content and not resolved_tool_calls:
+    explicitly_refused = finish_reason == "content_filter" or bool(getattr(message_part, "refusal", None))
+    if not content and not reasoning_content and not resolved_tool_calls and not explicitly_refused:
         raise EmptyResponseException(resp)
     return (
         _build_portable_api_response(

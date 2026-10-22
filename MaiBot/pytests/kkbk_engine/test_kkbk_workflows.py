@@ -197,7 +197,9 @@ def test_snapshot_diagnostics_are_copies(tmp_path):
 
 def test_shipped_workflow_is_valid_and_only_uses_existing_web_tools():
     snapshot = load_workflow_snapshot(DEFAULT_WORKFLOW_ROOT)
-    assert not snapshot.error and len(snapshot.workflows) == 1
-    assert snapshot.workflows[0].tools == ("web_search", "read_webpage")
+    # 开发副本同步线上启用集合后可有额外工作流；只约束随源码提供的搜索示例。
+    assert not snapshot.error
+    shipped = next(workflow for workflow in snapshot.workflows if workflow.workflow_id == "conservative-web-research")
+    assert shipped.tools == ("web_search", "read_webpage")
     raw = Path(DEFAULT_WORKFLOW_ROOT / "enabled.json").read_bytes()
     assert snapshot.manifest_sha256 == hashlib.sha256(raw).hexdigest()

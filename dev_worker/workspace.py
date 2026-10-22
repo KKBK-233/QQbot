@@ -28,19 +28,20 @@ def host_env(config):
     home=config.root/'host-home'
     home.mkdir(exist_ok=True,mode=0o700)
     text='[user]\n name = kkbk-dev-worker\n email = worker@localhost\n[safe]\n'
+    gitconfig=config.gitconfig_path.with_name('gitconfig-'+hashlib.sha256(str(config.source_repo.resolve()).encode()).hexdigest()[:12])
     for path in (config.source_repo.resolve(),config.source_repo.resolve()/'.git'):
         text+=' directory = '+json.dumps(str(path))+'\n'
     # 多个控制请求可并发解析提交，不能在 Git 读取时截断共用配置。
     with _GIT_CONFIG_LOCK:
-        if not config.gitconfig_path.exists() or config.gitconfig_path.read_text(encoding='utf-8')!=text:
+        if not gitconfig.exists() or gitconfig.read_text(encoding='utf-8')!=text:
             fd,temporary=tempfile.mkstemp(prefix='.gitconfig-',dir=config.root)
             try:
                 with os.fdopen(fd,'w',encoding='utf-8') as stream: stream.write(text)
-                os.replace(temporary,config.gitconfig_path)
+                os.replace(temporary,gitconfig)
             finally:
                 Path(temporary).unlink(missing_ok=True)
     env={'PATH':os.environ.get('PATH','') if os.name=='nt' else config.agent_path,
-         'HOME':str(home),'LANG':'C.UTF-8','GIT_CONFIG_GLOBAL':str(config.gitconfig_path),
+         'HOME':str(home),'LANG':'C.UTF-8','GIT_CONFIG_GLOBAL':str(gitconfig),
          'GIT_CONFIG_NOSYSTEM':'1','GIT_TERMINAL_PROMPT':'0','GIT_LFS_SKIP_SMUDGE':'1'}
     if os.name=='nt':
         for name in ('SYSTEMROOT','WINDIR','TEMP','TMP'):
@@ -138,6 +139,9 @@ def agent_env(config,folder):
             'DSH_TELEMETRY_DISABLED':'1','LANG':'C.UTF-8','VIRTUAL_ENV':str(venv),
             'PIP_CACHE_DIR':str(venv/'.cache/pip'),
             'PYTHONDONTWRITEBYTECODE':'1','GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_NOSYSTEM':'1'}
+    if config.project_manifest:
+        # 根仓维护代码位于组合副本中，不引用 Windows 原始仓或生产源码。
+        env['PYTHONPATH']=os.pathsep.join([str(folder/'ws'),str(folder/'ws/.project/integration')])
     if os.name=='nt':
         for name in ('SYSTEMROOT','WINDIR','TEMP','TMP'):
             if name in os.environ: env[name]=os.environ[name]
@@ -171,6 +175,9 @@ def sandbox_command(config,folder,command,*,agent=False):
 def developer_prompt(task):
     return ('请在当前独立工作副本完成开发任务。可以读取和修改整个项目、运行命令与测试。'
             '开发范围包括人设、system 与任务提示词、工作流、插件、依赖和执行代码。'
+            '组合副本的主仓在当前目录，维护根仓在 .project/integration，独立插件已展开；'
+            '.project-context.json 是当前人设的脱敏参考，不是配置发布入口。'
+            '源码发布由宿主按策略封装和执行，以 source_release 回执为准，不能自行探查部署通道。'
             '需要新增执行能力时补齐代码与接线，不用一份文字规则代替实现。'
             '在授权目标内持续修复并逐项验收；缺少信息时明确提出问题，等待协调者在同一会话补充。'
             '只处理本任务，不访问生产、其他工作区或凭据，不提交、推送或部署。'
@@ -197,6 +204,18 @@ def collect_patch(config,folder,base_commit,cancel,artifact_folder=None):
     env=agent_env(config,folder)
     git='/usr/bin/git' if config.use_sandbox else 'git'
     prefix=[git,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
+    if (folder/'project.json').is_file():
+        spec=json.loads((folder/'project.json').read_text())['spec']
+        # 独立插件目录被主仓忽略，显式纳入这些组件中的新增源码。
+        paths=[item['mount'] for item in spec['components']]
+        if (folder/'ws/plugins').is_dir(): paths.append('plugins')
+        if paths:
+            command=prefix+['add','-A','-f','--',*paths,
+                            ':(exclude)**/__pycache__/**',':(exclude)**/.pytest_cache/**']
+            result=run_process(sandbox_command(config,folder,command),cwd=folder/'ws',env=env,
+                stdout=output_folder/'component-stage.log',stderr=output_folder/'component-stage.err',
+                timeout=config.prepare_timeout_sec,cancel=cancel,max_bytes=config.max_log_bytes)
+            if result.exit_code: raise RuntimeError('component_stage_failed')
     for label,command in [('stage',prefix+['add','-A','--','.']),
                            ('patch',prefix+['diff','--cached','--binary','--no-ext-diff','--no-textconv',base_commit,'--','.']),
                            ('files',prefix+['diff','--cached','--name-only','-z',base_commit,'--','.'])]:

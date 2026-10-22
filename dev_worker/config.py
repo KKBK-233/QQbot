@@ -93,6 +93,8 @@ class WorkerConfig:
     # 线上工作流目录与加载器；为 None 时不同步线上基线，也不自动发布。
     live_workflows: Path | None = None
     live_loader: Path | None = None
+    # 多仓组合与发布映射只从维护端文件读取，不接收模型参数。
+    project_manifest: Path | None = None
 
     # ----- 派生路径 -----
 
@@ -200,6 +202,8 @@ class WorkerConfig:
             compact_retain_tokens=_env_int(env, "COMPACT_RETAIN_TOKENS", 32_000),
             live_workflows=_env_path(env, "LIVE_WORKFLOWS", DEFAULT_LIVE_WORKFLOWS),
             live_loader=_env_path(env, "LIVE_LOADER", DEFAULT_LIVE_LOADER),
+            project_manifest=_env_path(env, "PROJECT_MANIFEST", str(Path(env.get(ENV_PREFIX+'ROOT',DEFAULT_ROOT))/'project.json')
+                if (Path(env.get(ENV_PREFIX+'ROOT',DEFAULT_ROOT))/'project.json').is_file() else "off"),
         )
 
     def is_allowed(self, requester: str) -> bool:

@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "overlay_live_code": true,
+  "auto_source_release": true,
+  "components": [
+    {"mount": ".project/integration", "source": "/mnt/d/code/web/QQbot", "ref": "main"},
+    {"mount": "plugins/image_reverse_search", "source": "/mnt/d/code/web/QQbot/MaiBot/plugins/image_reverse_search", "ref": "HEAD"},
+    {"mount": "plugins/qqbot-web-search", "source": "/mnt/d/code/web/QQbot/MaiBot/plugins/qqbot-web-search", "ref": "HEAD"},
+    {"mount": "plugins/qqbot-task-assist", "source": "/mnt/d/code/web/QQbot/MaiBot/plugins/qqbot-task-assist", "ref": "HEAD"},
+    {"mount": "plugins/MaiBot-SnowLuma-Adapter", "source": "/mnt/d/code/web/QQbot/MaiBot/plugins/MaiBot-SnowLuma-Adapter", "ref": "HEAD"}
+  ],
+  "patches": [
+    {"file": ".project/integration/docs/kkbk-engine/snowluma-inline-budget.patch", "directory": "plugins/MaiBot-SnowLuma-Adapter"}
+  ],
+  "snapshots": [
+    {"name": "bot", "source": "/home/qqbot/QQbot/MaiBot/config/bot_config.toml", "fields": ["personality"]}
+  ],
+  "non_runtime": [
+    ".project-context.json", "pytests", "docs", ".project/integration/tests", ".project/integration/docs"
+  ],
+  "mappings": [
+    {"workspace": ".", "live": "/home/qqbot/QQbot/MaiBot", "include": ["src", "prompts", "workflows", "template", "bot.py", "requirements.txt", "pyproject.toml", "uv.lock"], "service": "maibot"},
+    {"workspace": "plugins", "live": "/home/qqbot/QQbot/MaiBot/plugins", "include": ["."], "auto_publish": true, "service": "maibot"},
+    {"workspace": "plugins/MaiBot-SnowLuma-Adapter", "live": "/home/qqbot/QQbot/MaiBot/plugins/MaiBot-SnowLuma-Adapter", "include": ["."], "service": "maibot"},
+    {"workspace": ".project/integration", "live": "/home/qqbot/QQbot", "include": [], "overlay_live_code": false},
+    {"workspace": ".project/integration/image-tool/maibot-plugin", "live": "/home/qqbot/QQbot/MaiBot/plugins/qqbot-image", "include": ["."], "auto_publish": true, "service": "maibot"},
+    {"workspace": ".project/integration/dev_worker", "live": "/home/qqbot/dev-harness/worker-code/dev_worker", "include": ["."], "service": "dev-worker", "overlay_live_code": false}
+  ],
+  "checks": [
+    {"when": "plugins/image_reverse_search", "requires": ["maibot_sdk", "PicImageSearch"], "argv": ["-m", "pytest", "-q", "--noconftest", "-p", "no:cacheprovider", "plugins/image_reverse_search/tests"]},
+    {"when": "plugins", "argv": ["-m", "compileall", "-q", "plugins"]},
+    {"when": ".project/integration/dev_worker", "argv": ["-m", "unittest", "discover", "-s", ".project/integration/tests", "-p", "test_dev*.py", "-q"]}
+  ],
+  "dependencies": {
+    "when": ["requirements.txt", "pyproject.toml", "uv.lock"],
+    "requirements": "requirements.txt",
+    "site": "/home/qqbot/QQbot/MaiBot/.venv/lib/python3.12/site-packages",
+    "service": "maibot",
+    "checks": [["-m", "pip", "check"], ["-m", "compileall", "-q", "{source}/src"]]
+  },
+  "services": {
+    "maibot": {
+      "stop": [["/usr/bin/python3", "/home/qqbot/dev-harness/worker-code/dev_worker/lifecycle.py", "stop", "maibot"]],
+      "start": [["/usr/bin/python3", "/home/qqbot/dev-harness/worker-code/dev_worker/lifecycle.py", "start", "maibot"]],
+      "health": [["/usr/bin/python3", "/home/qqbot/dev-harness/worker-code/dev_worker/lifecycle.py", "health", "maibot"]]
+    },
+    "dev-worker": {
+      "stop": [["/usr/bin/python3", "/home/qqbot/dev-harness/worker-code/dev_worker/lifecycle.py", "stop", "dev-worker"]],
+      "start": [["/usr/bin/python3", "/home/qqbot/dev-harness/worker-code/dev_worker/lifecycle.py", "start", "dev-worker"]],
+      "health": [["/usr/bin/python3", "/home/qqbot/dev-harness/worker-code/dev_worker/lifecycle.py", "health", "dev-worker"]]
+    }
+  }
+}

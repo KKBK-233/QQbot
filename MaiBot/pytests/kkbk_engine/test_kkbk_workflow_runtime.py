@@ -17,7 +17,9 @@ from src.kkbk_engine.config import EngineConfig
 from src.kkbk_engine.gate import LookOutcome
 from src.kkbk_engine.guards import ConcurrencyGate, QueueFullError, QueueTimeoutError, SlidingWindowLimiter
 from src.kkbk_engine.search_evidence import SearchEvidence
-from src.kkbk_engine.model_errors import error_kind, failure_text, retryable
+from src.kkbk_engine.model_errors import (
+    ModelOutputError, check_model_output, error_kind, failure_text, output_metadata, retryable,
+)
 from src.kkbk_engine.workflows import build_workflow_guidance, load_workflow_snapshot
 
 from test_kkbk_workflows import setup_files
@@ -124,6 +126,8 @@ def runtime_harness(root):
         "error_kind": error_kind,
         "failure_text": failure_text,
         "retryable": retryable,
+        "check_model_output": check_model_output,
+        "output_metadata": output_metadata,
     }
     # 一并编译实际名称白名单，避免测试自行放宽工具选择。
     exec(compile(ast.Module(body=[*mixins, klass], type_ignores=[]), str(path), "exec"), namespace)
@@ -165,6 +169,96 @@ def look():
     return SimpleNamespace(
         trigger_message_id="m1", requires_reply=True, no_quote_user_ids=frozenset(), reason="mention"
     )
+
+
+def empty_response(*, finish="stop", refusal=None, call=None):
+    """模拟提供方返回成功但没有动作正文，保留可核查的协议字段。"""
+    result = response(call=call)
+    result.response = "  "
+    result.reasoning = "诊断只记录长度"
+    result.provider_response = {"choices": [{"finish_reason": finish, "message": {"refusal": refusal}}]}
+    return result
+
+
+def test_empty_output_retries_once_without_fabricated_correction(tmp_path):
+    runtime, logger = runtime_harness(tmp_path)
+    runtime._llm.generate_response_with_context.side_effect = [empty_response(), response()]
+    items = []
+    asyncio.run(runtime._generate(items, heavy=False, specs=[], validation=ValidationContext(True, {}, frozenset(), 1500)))
+    assert runtime._llm.generate_response_with_context.await_count == 2
+    assert items == []  # 没有输出不是非法 JSON；不附加虚构的模型文本或思考。
+    records = [json.loads(call.args[0]) for call in logger.info.call_args_list]
+    assert records[0]["content_chars"] == 2 and records[0]["finish_reason"] == "stop"
+    assert "诊断只记录长度" not in json.dumps(records, ensure_ascii=False)
+
+
+def test_repeated_empty_is_not_silent_and_never_executes_tools(tmp_path):
+    runtime, _ = runtime_harness(tmp_path)
+    runtime._llm.generate_response_with_context.side_effect = [empty_response(), empty_response()]
+    with pytest.raises(ModelOutputError, match="empty_output") as caught:
+        asyncio.run(runtime._turn(look()))
+    assert "连续返回空正文" in failure_text(caught.value)
+    runtime.gate.complete.assert_not_called()
+    runtime._invoke.assert_not_awaited()
+
+
+@pytest.mark.parametrize("finish,refusal", [("content_filter", None), ("stop", "明确拒绝")])
+def test_explicit_refusal_does_not_retry(tmp_path, finish, refusal):
+    runtime, _ = runtime_harness(tmp_path)
+    runtime._llm.generate_response_with_context.return_value = empty_response(finish=finish, refusal=refusal)
+    with pytest.raises(ModelOutputError, match="refused"):
+        asyncio.run(runtime._turn(look()))
+    assert runtime._llm.generate_response_with_context.await_count == 1
+
+
+def test_blank_content_with_tool_call_is_valid(tmp_path):
+    runtime, _ = runtime_harness(tmp_path)
+    call = SimpleNamespace(func_name="web_search", args={}, call_id="one")
+    runtime._tool_llm.generate_response_with_context.return_value = empty_response(call=call)
+    result, action = asyncio.run(runtime._generate([], heavy=True, specs=[], validation=ValidationContext(False, {}, frozenset(), 1500)))
+    assert result.tool_calls == [call] and action is None
+    assert runtime._tool_llm.generate_response_with_context.await_count == 1
+
+
+def test_chat_client_preserves_explicit_refusal_diagnostic():
+    """执行真实解析函数，避免只给引擎伪造一个生产端没有的诊断字段。"""
+    path = Path(__file__).resolve().parents[2] / "src/llm_models/model_client/openai_client.py"
+    names = {"_default_normal_response_parser", "_build_portable_api_response", "_chat_response_diagnostic"}
+    nodes = [n for n in ast.parse(path.read_text(encoding="utf-8")).body
+             if isinstance(n, ast.FunctionDef) and n.name in names]
+    ns = {
+        "ReasoningParseMode": SimpleNamespace(NONE="none"),
+        "_extract_reasoning_content": lambda *_: None,
+        "_extract_content_blocks": lambda *_: (None, None, []),
+        "_extract_usage_record": lambda *_: None,
+        "_log_length_truncation": lambda *_: None,
+        "_apply_xml_tool_call_fallback": lambda content, reason, calls, *_: (content, reason, calls),
+        "build_portable_output_items": lambda **_: (),
+        "APIResponse": lambda **kw: SimpleNamespace(**kw),
+        "EmptyResponseException": RuntimeError,
+    }
+    future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[future, *nodes], type_ignores=[])), str(path), "exec"), ns)
+    raw = SimpleNamespace(choices=[SimpleNamespace(finish_reason="content_filter",
+        message=SimpleNamespace(content=None, tool_calls=[], refusal="不记录正文"))], usage=None, model="offline")
+    result, _ = ns["_default_normal_response_parser"](raw, reasoning_parse_mode="none",
+        tool_argument_parse_mode=None, reasoning_key="reasoning_content", logical_turn_id="one",
+        max_tokens=8192, trace_context=None)
+    assert result.provider_response["choices"][0]["message"]["refusal"] is True
+    assert "不记录正文" not in json.dumps(result.provider_response, ensure_ascii=False)
+
+
+def test_empty_final_response_delivers_existing_search_without_reexecution(tmp_path):
+    setup_files(tmp_path)
+    runtime, _ = runtime_harness(tmp_path)
+    runtime._llm.generate_response_with_context.return_value = response("escalate", task="搜索")
+    call = SimpleNamespace(func_name="web_search", args={}, call_id="one")
+    runtime._tool_llm.generate_response_with_context.side_effect = [response(call=call), empty_response(), empty_response()]
+    runtime._invoke.return_value = ToolResult(content="来源：https://example.com/source\n已经取得的内容")
+    asyncio.run(runtime._turn(look()))
+    assert "连续返回空正文" in runtime._send.await_args.args[0].text
+    assert "https://example.com/source" in runtime._send.await_args.args[0].text
+    runtime._invoke.assert_awaited_once()
 
 
 def test_in_flight_tools_and_retry_keep_snapshot_and_next_turn_reloads(tmp_path):
@@ -265,7 +359,7 @@ def test_action_retry_preserves_current_reply_requirement(tmp_path, requires_rep
         requests.append(callback(None))
         if len(requests) == 1:
             result = response()
-            result.response = ""
+            result.response = "invalid json"
             return result
         return response() if requires_reply else response("silent", text="")
 

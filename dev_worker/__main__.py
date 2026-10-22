@@ -32,6 +32,12 @@ def main(argv=None):
     cancel=commands.add_parser('cancel'); cancel.add_argument('task_id')
     setup=commands.add_parser('setup'); setup.add_argument('--full',action='store_true')
     commands.add_parser('serve')
+    publish=commands.add_parser('publish-source')
+    publish.add_argument('task_id')
+    publish.add_argument('--allow-core',action='store_true')
+    for operation in ('rollback-source','recover-source'):
+        command=commands.add_parser(operation)
+        command.add_argument('release_id')
     try:
         args=parser.parse_args(argv)
         config=WorkerConfig.from_env()
@@ -50,6 +56,14 @@ def main(argv=None):
         elif args.command=='cancel': result=worker.store.cancel_session(args.task_id)
         elif args.command=='setup':
             with exclusive_lock(config.lock_path): result=setup_base(config,args.full)
+        elif args.command=='publish-source':
+            from .source_release import publish
+            with exclusive_lock(config.lock_path):
+                result=publish(config,worker.store,args.task_id,allow_core=args.allow_core)
+        elif args.command in ('rollback-source','recover-source'):
+            from .source_release import rollback
+            with exclusive_lock(config.lock_path):
+                result=rollback(config,args.release_id,recover=args.command=='recover-source')
         else:
             if not config.use_sandbox or sys.platform!='linux':
                 raise ValueError('真实执行仅支持 Linux bwrap；无隔离模式仅供离线测试')
@@ -60,7 +74,8 @@ def main(argv=None):
                 if not args.loop: break
                 if result: print(json.dumps(redactor.value(result),ensure_ascii=False),flush=True)
                 time.sleep(2)
-        task_failed=args.command=='run' and result is not None and result['status']!='succeeded'
+        task_failed=(args.command=='run' and result is not None and result['status']!='succeeded') or (
+            args.command=='publish-source' and result['state']!='installed')
         print(json.dumps(redactor.value({'success':not task_failed,'result':result}),ensure_ascii=False),flush=True)
         return 2 if task_failed else 0
     except KeyboardInterrupt:

@@ -63,6 +63,7 @@ class Store:
                 created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, reason TEXT,
                 result TEXT NOT NULL DEFAULT '{}')''')
             db.execute('CREATE TABLE IF NOT EXISTS task_requests (request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE)')
+            db.execute('CREATE TABLE IF NOT EXISTS source_publications (task_id TEXT PRIMARY KEY, result TEXT NOT NULL)')
             db.execute('''CREATE TABLE IF NOT EXISTS notifications (
                 id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL,
                 state TEXT NOT NULL DEFAULT 'pending', claim_token TEXT, receipt TEXT,
@@ -110,6 +111,16 @@ class Store:
         with self.connect() as db:
             row=db.execute('SELECT task_id FROM task_requests WHERE request_key=?',(request_key,)).fetchone()
         return self.get(row['task_id']) if row else None
+
+    def source_publication(self, task_id, result=None):
+        """源码发布结果独立于开发终态，后续发布不能改写原测试结论。"""
+        self.get(task_id)
+        with self.connect() as db:
+            if result is not None:
+                db.execute('INSERT OR REPLACE INTO source_publications VALUES(?,?)',
+                           (task_id,json.dumps(result,ensure_ascii=False)))
+            row=db.execute('SELECT result FROM source_publications WHERE task_id=?',(task_id,)).fetchone()
+        return json.loads(row['result']) if row else None
 
     def session(self, task_id):
         """任务轮次共享一个稳定开发会话，旧终态和旧产物保持不变。"""

@@ -34,7 +34,7 @@ from .development import DevelopmentToolProvider
 from .dev_protocol import completion_text
 from .config import EngineConfig, IdentityConfig
 from .context_items import text_item
-from .model_errors import error_kind, failure_text, retryable
+from .model_errors import check_model_output, error_kind, failure_text, output_metadata, retryable
 from .request_context import RequestContextMixin
 from .tool_execution import ToolExecutionMixin
 from .gate import LookOutcome, SessionGate
@@ -255,6 +255,7 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
                 result = await client.generate_response_with_context(
                     lambda client, model_info=None: list(items), options
                 )
+                metadata = output_metadata(result)
                 logger.info(
                     json.dumps(
                         {
@@ -269,10 +270,12 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
                             "cache_hit_tokens": result.prompt_cache_hit_tokens,
                             "response": result.response,
                             "tools": [call.func_name for call in result.tool_calls or []],
+                            **metadata,
                         },
                         ensure_ascii=False,
                     )
                 )
+                check_model_output(result, metadata)
                 action = None if result.tool_calls else validate_action(parse_action(result.response), validation)
                 return result, action
             except Exception as exc:
@@ -383,10 +386,10 @@ class KKBKHeartFlowChatting(RequestContextMixin, ToolExecutionMixin):
                         items, heavy=True, specs=[] if finalizing else specs, validation=validation
                     )
                 except Exception as exc:
-                    if error_kind(exc) != "quota" or not search_evidence.attempts:
+                    if error_kind(exc) not in {"quota", "empty_output", "refused"} or not search_evidence.attempts:
                         raise
-                    # 额度耗尽后不再请求模型；仍交付已经取得的来源与未完成部分。
-                    prefix = "模型额度或余额不足，已停止后续模型请求。"
+                    # 模型无法收尾时仍交付已有证据，不重新执行搜索或其他工具。
+                    prefix = failure_text(exc)
                     partial = search_evidence.partial_reply(max(0, validation.max_chars - len(prefix) - 1))
                     action = ModelAction(
                         action="reply", track="leave", text=(prefix + "\n" + partial)[: validation.max_chars]

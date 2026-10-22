@@ -57,7 +57,25 @@ def completion_text(task):
         lines.append('改动：'+'、'.join(patch['files'][:6]))
         lines.append(f"补丁 {patch.get('bytes',0)} 字节；独立测试退出码 {task.get('test_exit')}。")
     if task.get('reason') not in (None,'verified_patch'): lines.append('原因：'+str(task['reason']))
-    # 工作流候选会自动发布；其余候选只留在开发工作副本。
+    # 工作流和源码发布分别记录，测试完成不等于业务验收已经通过。
+    source=task.get('source_release')
+    if source:
+        state=source['state']
+        if state=='installed':
+            lines.append('源码已发布并通过健康检查，原场景业务验收待完成；发布记录 '+source['id']+'。')
+        elif state=='rolled_back':
+            lines.append('源码已恢复原版本；原因：'+source.get('error','主动回退')[:200])
+        else:
+            lines.append('源码未启用，发布状态 '+state+'：'+source.get('error',source.get('restore_error',''))[:200])
+        return '\n'.join(lines)[:1400]
+    candidate=task.get('source_candidate')
+    if candidate and candidate.get('state')=='blocked':
+        lines.append('源码候选未封装，发布被阻塞：'+candidate.get('error','缺少发布条件')[:300])
+    if candidate and candidate.get('state')=='verified' and candidate.get('files')==0:
+        lines.append('本轮仅有测试或文档等非运行文件，无需部署；补丁已保留。')
+        return '\n'.join(lines)[:1400]
+    if candidate and candidate.get('core_approval_required'):
+        lines.append('源码候选已封装，涉及维护端发布范围，需维护端显式发布；不要重复续聊探查部署入口。')
     published=task.get('release')
     if not published:
         lines.append('结果保留在开发工作副本，尚未发布。')
